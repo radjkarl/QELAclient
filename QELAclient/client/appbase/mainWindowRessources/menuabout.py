@@ -34,7 +34,7 @@ class MenuAbout(QtWidgets.QWidget):
         """
         self.setInfo(getattr(mod, 'name', mod.__name__),
                      mod.__doc__, mod.__author__, mod.__email__,
-                     mod.__version__,  mod.__license__,  mod.__url__)
+                     mod.__version__, mod.__license__, mod.__url__)
 
     def setInfo(self, name, info, author, email, version, license_, url):
         self.setWindowTitle('About %s' % name)
@@ -71,7 +71,14 @@ Url:            <a href="%s">%s</a>""" % (
             logo.setFixedSize(int(w), int(h))
             self.layout().itemAt(0).addWidget(logo)
             if url:
-                logo.mousePressEvent = lambda evt, u=url: self._openUrl(evt, u)
+                logo.mousePressEvent = lambda evt, u = url: self._openUrl(evt, u)
+                logo.setCursor (QtCore.Qt.PointingHandCursor)
+#                 logo.setTextInteractionFlags(QtCore.Qt.LinksAccessibleByMouse)
+
+    @staticmethod
+    def _setAsLink(widget):
+        widget.setOpenExternalLinks(True)
+        widget.setTextInteractionFlags(QtCore.Qt.LinksAccessibleByMouse)
 
     def addTab(self, title, widgetOrText):
         if self.tabs is None:
@@ -84,6 +91,7 @@ Url:            <a href="%s">%s</a>""" % (
             widget.setReadOnly(True)
             widget.setHtml(widgetOrText)
             widget.setOpenExternalLinks(True)
+
         self.tabs.addTab(widget, title)
 
     def _openUrl(self, evt, url):

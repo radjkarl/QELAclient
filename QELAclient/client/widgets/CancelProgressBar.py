@@ -2,6 +2,7 @@ from PyQt5 import QtWidgets
 
 
 class CancelProgressBar(QtWidgets.QWidget):
+
     def __init__(self):
         super().__init__()
         self.bar = QtWidgets.QProgressBar()
@@ -15,14 +16,19 @@ class CancelProgressBar(QtWidgets.QWidget):
 #         self.color = 'black'
         self.connectedFn = None
 
-    def setCancel(self, fn):
+    def setCancel(self, fn=None):
+        '''
+        enable cancel button
+        fn ... function to execute at cancel
+        '''
         try:
             self.btn.clicked.disconnect()
         except TypeError:
             pass
-        if fn:
-            self.btn.clicked.connect(fn)
-            self.btn.clicked.connect(self.hide)
+#         if fn:
+        self.btn.clicked.connect(self.hide)
+        self.btn.clicked.connect(fn)
+
         self.connectedFn = fn
 #         self._cancel_active = True
 
@@ -39,6 +45,7 @@ class CancelProgressBar(QtWidgets.QWidget):
 
     def hide(self):
         super().hide()
+        self.btn.hide()
         self.bar.setValue(0)
         self.bar.setFormat('')
         self.bar.setStyleSheet('')
@@ -46,5 +53,5 @@ class CancelProgressBar(QtWidgets.QWidget):
 #         self.color = 'black'
 
         if self.connectedFn:
-            self.btn.disconnect()
+            self.btn.clicked.connect(self.connectedFn)
             self.connectedFn = None

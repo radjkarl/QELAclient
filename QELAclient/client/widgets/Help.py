@@ -1,5 +1,5 @@
 from PyQt5 import QtWidgets, QtGui
-
+from textwrap import dedent
 
 # class QLabel(QtWidgets.QLabel):
 #     '''
@@ -19,6 +19,7 @@ from PyQt5 import QtWidgets, QtGui
 
 
 class Help(QtWidgets.QWidget):
+
     def __init__(self, gui):
         QtWidgets.QWidget.__init__(self)
         self.gui = gui
@@ -28,7 +29,7 @@ class Help(QtWidgets.QWidget):
         self._about = None
 
         self.setFixedWidth(300)
-        self._lastFrame = None
+#         self._lastFrame = None
         pal = self.palette()
         pal.setColor(QtGui.QPalette.Background, QtGui.QColor('#e2e4ed'))
         self.setAutoFillBackground(True)
@@ -49,7 +50,7 @@ class Help(QtWidgets.QWidget):
         btnClose.setFlat(True)
         btnClose.clicked.connect(self.hide)
         btnClose.setIcon(QtWidgets.QApplication.style().standardIcon(
-            QtWidgets.QStyle.SP_TitleBarCloseButton))
+            QtWidgets.QStyle.SP_DialogCloseButton))  # SP_TitleBarCloseButton
         btnClose.resize(15, 15)
         self.ltop.addStretch()
         self.ltop.addWidget(btnClose, stretch=0)
@@ -57,12 +58,12 @@ class Help(QtWidgets.QWidget):
         self.browser = QtWidgets.QTextBrowser()
         self.browser2 = QtWidgets.QTextBrowser()
 
-        ll.addLayout(self.ltop)
-        ll.addWidget(self.browser, 100)
-        ll.addStretch()
+        ll.addLayout(self.ltop, 0)
+        ll.addWidget(self.browser, 0)
         self.lab_selected = QtWidgets.QLabel('Selected:  none')
         ll.addWidget(self.lab_selected, 0)
-        ll.addWidget(self.browser2, 0)
+        ll.addWidget(self.browser2, 100)
+#         ll.addStretch()
 
         self.browser2.hide()
         self.lab_selected.hide()
@@ -72,31 +73,44 @@ class Help(QtWidgets.QWidget):
 
         if not tab:
             return
+
         if self.isVisible():
             style = '''background-color: rgb(102, 153, 255, 100);'''
             brush = QtGui.QBrush(QtGui.QColor(102, 153, 255, 100))
+            self._old = None
         else:
             style = ''
             brush = QtWidgets.QTableWidgetItem().background()
-
+            
         for ch in tab.findChildren(QtWidgets.QWidget):
             # all child widgets:
             h = self._widgetHelp(ch)
-            if hasattr(ch, 'setStyleSheet'):
-                ch.setStyleSheet(style if h else '')
-            # all horizontal table header items:
-            elif h and isinstance(ch, QtWidgets.QTableWidget):
-                for c in range(ch.columnCount()):
-                    # FIXME: setBackground currently has no effect, see
-                    # https://bugreports.qt.io/browse/QTBUG-57637
-                    item = ch.horizontalHeaderItem(c)
-                    item.setBackground(brush)
-                    ch.setHorizontalHeaderItem(c, item)
+            if h:
+                if hasattr(ch, 'setStyleSheet'):
+                    ch.setStyleSheet(style)
+                    
+                    sig = getattr(ch, 'clicked', getattr(ch, 'activated', None))
+                    if sig:        
+                        if style:
+                            ch._mousePressEvent = ch.mousePressEvent
+                            ch.mousePressEvent = lambda evt, ch = ch: self._chClicked(evt, ch)
+                        elif hasattr(ch, '_mousePressEvent'):
+                            ch.mousePressEvent = ch._mousePressEvent
+                            del ch._mousePressEvent
+                        
+                # all horizontal table header items:
+                elif isinstance(ch, QtWidgets.QTableWidget):
+                    for c in range(ch.columnCount()):
+                        # FIXME: setBackground currently has no effect, see
+                        # https://bugreports.qt.io/browse/QTBUG-57637
+                        item = ch.horizontalHeaderItem(c)
+                        item.setBackground(brush)
+                        ch.setHorizontalHeaderItem(c, item)
 
     def tabChanged(self, index):
         w = self.gui.tabs.widget(index)
-        if hasattr(w, 'help'):
-            self.browser.setText(w.help)
+        if w.__doc__:
+            self.browser.setHtml(dedent(w.__doc__).lstrip().replace('\n', '<br>'))
         else:
             self.browser.setText('')
         self.lab_tab.setText('Tab:  %s' % self.gui.tabs.tabText(index))
@@ -117,8 +131,8 @@ class Help(QtWidgets.QWidget):
         if old is not None:
             if hasattr(old, 'lastStyle'):
                 old.setStyleSheet(old.lastStyle)
-            else:
-                old.setStyleSheet('')
+#             else:
+#                 old.setStyleSheet('')
         if new is not None:
             hel = self._widgetHelp(new)
             if hel:
@@ -146,24 +160,21 @@ class Help(QtWidgets.QWidget):
                 self.lab_selected.show()
 
         else:
-            #             self.browser2.setText('')
-            #             self.lab_selected.setText('Selected:  none')
             self.browser2.hide()
             self.lab_selected.hide()
 
+    def _chClicked(self, evt, ch):
+        if ch != self._old:
+            self._update(self._old, ch)
+            self._old = ch   
+        ch._mousePressEvent(evt) 
+
     def show(self):
-        QtWidgets.QApplication.instance().focusChanged.connect(self._update)
         super().show()
         if self.gui is not None:
             self._decorateCurrentTab()
 
     def hide(self):
-        if self._lastFrame is not None:
-            self._lastFrame.hide()
-        try:
-            QtWidgets.QApplication.instance().focusChanged.disconnect(self._update)
-        except TypeError:
-            pass
         super().hide()
         self._decorateCurrentTab()
 

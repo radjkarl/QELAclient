@@ -13,7 +13,6 @@ from PyQt5.QtCore import Qt
 # own
 from fancytools.os.PathStr import PathStr
 
-
 from fancywidgets.pyQtBased.Dialogs import Dialogs
 from fancywidgets.pyQtBased.SnippingTool import SnippingArea
 from fancywidgets import media
@@ -563,9 +562,9 @@ class ToolBarInsert(QtWidgets.QToolBar):
         snippedAction = QtWidgets.QAction(QtGui.QIcon(
             iconfolder.dirname().join("snipping.svg")), "Snipping tool", self)
         snippedAction.triggered.connect(self.insertSnipped)
-
-        self.addAction(snippedAction)
+        
         self.addAction(imageAction)
+        self.addAction(snippedAction)
 
     def insertSnipped(self):
         s = SnippingArea()
@@ -588,7 +587,9 @@ class ToolBarInsert(QtWidgets.QToolBar):
         else:
             self._insertQImage(image)
 
-    def _insertQImage(self, image, hmax=500):
+    def _insertQImage(self, image, hmax=None):
+        if hmax is None:
+            hmax = self.text.height() / 2
         self._nimages += 1
         cursor = self.text.textCursor()
         doc = self.text.document()

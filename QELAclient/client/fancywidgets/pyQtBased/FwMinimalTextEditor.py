@@ -2,7 +2,7 @@
 # foreign
 from PyQt5 import QtWidgets, QtCore
 # this pkg
-from fancywidgets.pyQtBased._textEditorUtils import ToolBarFormat, ToolBarFont, ToolBarInsert, MainWindow
+from fancywidgets.pyQtBased._textEditorUtils import ToolBarFormat, ToolBarInsert, MainWindow  # ToolBarFont
 
 
 class FwMinimalTextEditor(MainWindow):
@@ -12,12 +12,14 @@ class FwMinimalTextEditor(MainWindow):
 
         self.text.setTabStopWidth(12)
         self.setCentralWidget(self.text)
-        self.addToolBar(ToolBarFont(self.text))
-        toolBarInsert = ToolBarInsert(self.text)
-        self.addToolBar(toolBarInsert)
-        self.addToolBarBreak()
+#         self.addToolBar(ToolBarFont(self.text))
+
+#         self.addToolBarBreak()
         toolBar = ToolBarFormat(self.text)
         self.addToolBar(toolBar)
+
+        toolBarInsert = ToolBarInsert(self.text)
+        self.addToolBar(toolBarInsert)
 
         toolBarInsert.setIconSize(QtCore.QSize(16, 16))
         toolBar.setIconSize(QtCore.QSize(16, 16))

@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 import numpy as np
-
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 from fancytools.utils import json2 as json
-from imgProcessor.imgIO import imread
 
 # local
 from client.communication.utils import agendaFromChanged
 from client.widgets.Contact import Contact
 from client.widgets.GridEditor import CompareGridEditor
+from client.widgets._Base import QMenu
+import client
 
 
 class QTreeWidget(QtWidgets.QTreeWidget):
@@ -38,6 +38,7 @@ class QTreeWidget(QtWidgets.QTreeWidget):
             else:
                 # build list [topitem, child, childchild...]
                 out.append(item)
+
         _fn(self.currentItem())
         return out
 
@@ -89,11 +90,22 @@ class QTreeWidget(QtWidgets.QTreeWidget):
 
 
 class TabCheck(QtWidgets.QSplitter):
-    help = '''Although applied image processing routines automatically detect
-PV modules and cells, manual verification / modification can be needed
-in case device corners and grid parameters were detected wrongly or the camera correction
-causes erroneous results.
-XXXXXXXXXXXXXXX
+    '''Nobody is perfect. Although our image processing routines are fully automated,
+    they can sometimes fail to precisely detect a solar module. Especially for
+    uncommon module types or low quality images your help for verify or alter our results
+    can be needed. This tab displays results from camera and perspective correction
+    of all EL images in your current project. In  here,  images are highly compressed
+    to  reduce download times. 
+    
+    As soon as new results are available,  this tab will be highlighted.
+    Please take your time to go through the results. You can verify of change:
+        * Position of the four module corners.
+        * Position of the bottom left corner
+        * Number of horizontal/vertical cells and busbars.
+    After clicking on <Submit changes> all images modified by you will be processed again.
+    Manual verification increases quality of the generated module report.
+    Please inform  us, if you find odd or erroneous results. For this click  on 
+            Actions -> Report a problem
     '''
 
     def __init__(self, gui=None):
@@ -109,34 +121,41 @@ XXXXXXXXXXXXXXX
         self._grid.verticesChanged.connect(self._updateVertices)
 
         self.btn_markCurrentDone = QtWidgets.QPushButton("Mark verified")
+        self.btn_markCurrentDone.setToolTip('''Confirm  that detected module position and type are correct. 
+As soon as all modules are verified, click on <Submit> to inform our server.''')
         self.btn_markCurrentDone.clicked.connect(self._toggleVerified)
 
         self._grid.bottomLayout.addWidget(self.btn_markCurrentDone, 0, 0)
 
         self.list = QTreeWidget()
         self.list.setHeaderHidden(True)
-
-        btnReset = QtWidgets.QPushButton('Reset')
-        btnReset.clicked.connect(self._resetAll)
+        self.list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(lambda pos: self._menu.popup(pos))
 
         btnSubmit = QtWidgets.QPushButton('Submit')
+        btnSubmit.setToolTip('''Submit all changes to  the server. 
+Correct results will  be marked as 'verified' in the module report and modified result will be 
+processed again.''')
         btnSubmit.clicked.connect(self._acceptAll)
 
         llist = QtWidgets.QHBoxLayout()
-        llist.addWidget(QtWidgets.QLabel("All:"))
-        llist.addWidget(btnReset)
-        llist.addWidget(btnSubmit)
         llist.addStretch()
+        llist.addWidget(btnSubmit)
 
         l3 = QtWidgets.QVBoxLayout()
         l3.addLayout(llist)
         l3.addWidget(self.list)
 
         btn_actions = QtWidgets.QPushButton("Actions")
-        menu = QtWidgets.QMenu()
+        self._menu = menu = QMenu()
+        menu.aboutToShow.connect(self._showMenu)
 
-        menu.addAction("Reset changes").triggered.connect(self._resetChanges)
-        a = menu.addAction("Recalculate all measurements")
+        m = menu.addMenu('All')
+        a = m.addAction("Reset changes")
+        a.setToolTip('Reset everything to the state given by the server.')
+        a.triggered.connect(self._resetAll)
+
+        a = m.addAction("Recalculate all measurements")
         a.setToolTip('''Choose this option to run image processing on all submitted images
 of the selected module again. This is useful, since QELA image processing routines are continuously developed
 and higher quality results can be available. Additionally, this option will define a new 
@@ -144,18 +163,39 @@ template image (the image other images are perspectively aligned to) depending o
 image within the image set.''')
         a.triggered.connect(self._processAllAgain)
 
-        menu.addAction("Report a problem"
-                       ).triggered.connect(self._reportProblem)
-        menu.addAction("Upload images again").triggered.connect(
-            self._uploadAgain)
-        menu.addAction("Remove measurement").triggered.connect(
-            self._removeMeasurement)
+        a = menu.addAction("Reset changes")
+        a.setToolTip('Reset everything to the state given  by the server.')
+        a.triggered.connect(self._resetChanges)
+
+        a = menu.addAction("Report a problem")
+        a.setToolTip('Write us a mail and inform us on the problem you experience.')
+        a.triggered.connect(self._reportProblem)
+        
+        a = menu.addAction("Upload images again")
+        a.setToolTip('Click this button to  upload and process the images of the selected measurement again.')
+        a.triggered.connect(self._uploadAgain)
+        
+        self._aRemove = a = menu.addAction("Remove measurement")
+        a.setToolTip('Remove the current measurement/device from the project. This includes all corresponding data. Pleas write us a mail, to undo this step.')
+        a.triggered.connect(self._removeMeasurement)
 
         btn_actions.setMenu(menu)
         l3.addWidget(btn_actions)
 
         wleft = QtWidgets.QWidget()
         wleft.setLayout(l3)
+
+        self.btnCollapse = QtWidgets.QPushButton(wleft)
+        self.btnCollapse.setIcon(QtGui.QIcon(
+            client.MEDIA_PATH.join('btn_toggle_collapse.svg')))
+        self.btnCollapse.toggled.connect(self._toggleExpandAll)
+        self.btnCollapse.setCheckable(True)
+        self.btnCollapse.setFlat(True)
+        self.btnCollapse.resize(15, 15)
+        self.btnCollapse.move(7, 15)
+        header = QtWidgets.QLabel('ID > Meas > Current', wleft)
+        header.move(25, 7)
+
         self.addWidget(wleft)
         self.addWidget(self._grid)
 
@@ -163,9 +203,54 @@ image within the image set.''')
 
         if self.gui is not None:
             self._timer = QtCore.QTimer()
-            self._timer.setInterval(3000)
+            self._timer.setInterval(5000)
             self._timer.timeout.connect(self.checkUpdates)
             self._timer.start()
+         
+    def saveState(self):
+        
+        try:
+            ID, meas, cur, typ = self._getIDmeasCur()
+        except AttributeError:  # no items
+            ll = []
+        else:
+            if typ == 'device':
+                ll = [ID.text(0)]
+            elif typ == 'measurement':
+                ll = [ID.text(0), meas.text(0)]
+            else:
+                ll = [ID.text(0), meas.text(0), cur.text(0)]
+
+        return {'expanded':self.btnCollapse.isChecked(),
+                'selected':ll}
+ 
+    def restoreState(self, state):
+        self.btnCollapse.setChecked(state['expanded'])
+        self._selectFromName(state['selected'])
+
+    def _selectFromName(self, ll):
+        if ll:
+            root = self.list.invisibleRootItem()
+            
+            def fn(name, parent, ll):  # try to select item by listed name ll=[ID,meas,current]
+                for i in range(parent.childCount()):
+                    child = parent.child(i)
+                    if child.text(0) == name:
+                        if ll:
+                            return fn(ll.pop(0), child, ll)
+                        else:
+                            self.list.setCurrentItem(child)
+    
+            fn(ll.pop(0), root, ll)                    
+
+    def _toggleExpandAll(self, checked):
+        if checked:
+            self.list.expandAll()
+        else:
+            self.list.collapseAll()
+            
+    def _showMenu(self):
+        self._aRemove.setText('Remove %s' % self._getIDmeasCur()[-1])
 
     def _processAllAgain(self):
         # TODO
@@ -177,7 +262,7 @@ image within the image set.''')
         items = self.list.getAffectedItems()
         lines = []
         for item in items:
-            data = item.data(1,  QtCore.Qt.UserRole)
+            data = item.data(1, QtCore.Qt.UserRole)
 
             agenda = self.gui.PATH_USER.join(
                 'upload', data['timestamp'] + '.csv')
@@ -205,11 +290,20 @@ image within the image set.''')
             box.exec_()
 
             if box.result() == box.Ok:
-                self.gui.server.removeMeasurements(*affected)
-                self.checkUpdates()
+                res = self.gui.server.removeMeasurements(*affected)
+                if res != 'OK':
+                    QtWidgets.QMessageBox.critical(self, 'Error removing measurements', res)
+                else:
+                    item = self.list.currentItem()
+                    parent = item.parent()
+                    if  parent is None:
+                        parent = self.list.invisibleRootItem()
+                    parent.removeChild(item)
+
+#                 self.checkUpdates()
 
     def _reportProblem(self):
-        ID, meas, cur = self._getIDmeasCur()
+        ID, meas, cur = self._getIDmeasCur()[:-1]
         self._contact = Contact(self.gui)
         self._contact.subject.setText('%s\\%s\\%s' % (
             ID.text(0), meas.text(0), cur.text(0)))
@@ -235,8 +329,11 @@ image within the image set.''')
         return data
 
     def _resetChanges(self, item):
+        if type(item) is bool:
+            item = self.list.currentItem()
+
         def _reset(item):
-            data = item.data(1,  QtCore.Qt.UserRole)
+            data = item.data(1, QtCore.Qt.UserRole)
             if data is not None:
                 item.setData(0, QtCore.Qt.UserRole,
                              self._excludeUnchangableKeys(data))
@@ -251,7 +348,7 @@ image within the image set.''')
         _reset(item)
 
         cur = self._getIDmeasCur()[2]
-        data = cur.data(0,  QtCore.Qt.UserRole)
+        data = cur.data(0, QtCore.Qt.UserRole)
         self._grid.grid.setVertices(data['vertices'])
 
         self._changeVerifiedColor(item)
@@ -265,7 +362,7 @@ image within the image set.''')
     def _updateVertices(self, vertices):
         cur = self._getIDmeasCur()[2]
 
-        data = cur.data(1,  QtCore.Qt.UserRole)
+        data = cur.data(1, QtCore.Qt.UserRole)
         originalvertices = data['vertices']
         data['vertices'] = vertices
         cur.setData(0, QtCore.Qt.UserRole, data)
@@ -279,34 +376,48 @@ image within the image set.''')
 
     def _updateGrid(self, key, val):
         ID = self._getIDmeasCur()[0]
+        # update data:
         data = ID.data(0, QtCore.Qt.UserRole)
         data[key] = val
         ID.setData(0, QtCore.Qt.UserRole, data)
+        # font -> bold 
         f = ID.font(0)
         changed = self._isIDmodified(ID)
         f.setBold(changed)
         ID.setFont(0, f)
+#         # grid is identical for all current and measurements of one device, so
+#         # update other items:
+#         for i in range(ID.childCount()):
+#             meas = ID.child(i)
+#             for j in range(meas.childCount()):
+#                 current = meas.child(j)
 
     def _getIDmeasCur(self):
         '''
-        returns current items for ID, measurement and current
+        returns ID, meas, cur, typ
+        of current item index(0...id,1...meas,2...current)
         '''
         item = self.list.currentItem()
         p = item.parent()
         if p is not None:
             pp = p.parent()
-            if pp is not None:
+            if pp is not None:  # item is current
                 ID, meas, cur = pp, p, item
-            else:
+                index = 'current'
+            else:  # item is measurement
                 ID, meas, cur = p, item, item.child(0)
-        else:
+                index = 'measurement'
+        else:  # item is ID
             ID, meas, cur = (item, item.child(0),
                              item.child(0).child(0))
-        return ID, meas, cur
+            index = 'device'
+        return ID, meas, cur, index
 
     def _loadImg(self):
+        if not self.list.currentItem():
+            return
         try:
-            ID, meas, cur = self._getIDmeasCur()
+            ID, meas, cur = self._getIDmeasCur()[:-1]
             txt = ID.text(0), meas.text(0), cur.text(0)
             root = self.gui.projectFolder()
             p = root.join(*txt)
@@ -314,47 +425,38 @@ image within the image set.''')
                 return
             self._lastP = p
 
-            p0 = p.join("prev_A.jpg")
-            p1 = p.join("prev_B.jpg")
+            p0 = p.join(".prev_A.jpg")
+            p1 = p.join(".prev_B.jpg")
             ll = len(root) + 1
             if not p0.exists():
-                self.gui.server.download(p0[ll:], root)
+                self.gui.server.download(p0[ll:], root.join(p0[ll:]))
             if not p1.exists():
-                self.gui.server.download(p1[ll:], root)
+                self.gui.server.download(p1[ll:], root.join(p1[ll:]))
 
-            img = imread(p0)
-            self._grid.imageview.setImage(img, autoRange=False)
-
-            img = imread(p1)
-            self._grid.imageview2.setImage(img, autoRange=False)
+            self._grid.readImg1(p0)
+            self._grid.readImg2(p1)
 
             # load/change grid
-            cells = ID.data(0,  QtCore.Qt.UserRole)['grid']
-            nsublines = ID.data(0,  QtCore.Qt.UserRole)['nsublines']
+            idata = ID.data(0, QtCore.Qt.UserRole)
+            cells = idata['grid'][::-1]
+            nsublines = idata['nsublines']
 
-            cdata = cur.data(0,  QtCore.Qt.UserRole)
-#             print(1111123, self._grid.grid.vertices())
-#             print(cdata['vertices'])
+            cdata = cur.data(0, QtCore.Qt.UserRole)
             vertices = cdata['vertices']
 
             # TODO: remove different conventions
-#             cells = cells[::-1]
-#             nsublines = nsublines[::-1]
-
-            vertices = np.array(vertices)[np.array([0, 3, 2, 1])]
-#             print(vertices, 9898)
+#             vertices = np.array(vertices)[np.array([0, 3, 2, 1])]
 
             self._grid.grid.setNCells(cells)
             self._grid.grid.setVertices(vertices)
-#             print(self._grid.grid.vertices(), 888888888888888888)
 
             self._grid.edX.setValue(cells[0])
             self._grid.edY.setValue(cells[1])
-            self._grid.edBBX.setValue(nsublines[0])
-            self._grid.edBBY.setValue(nsublines[1])
+            self._grid.edBBX.setValue(nsublines[1])
+            self._grid.edBBY.setValue(nsublines[0])
             self._updateBtnVerified(cdata['verified'])
         except AttributeError as e:
-            print(e)
+            print('error loading image: ', e)
 
     def toggleShowTab(self, show):
         t = self.gui.tabs
@@ -362,8 +464,10 @@ image within the image set.''')
 
     def buildTree(self, tree):
         show = bool(tree)
-        self.toggleShowTab(show)
         if show:
+            self.list.show()
+            citem = self.list.currentItem()
+            
             root = self.list.invisibleRootItem()
             last = [root, None, None]
 
@@ -373,8 +477,6 @@ image within the image set.''')
                 else:
                     parent = root
                 item = self.list.findChildItem(parent, name)
-#                 if params:
-#                     params = json.loads(params)
                 if item is None:
                     item = QtWidgets.QTreeWidgetItem(parent, [name])
                     if params:
@@ -385,7 +487,9 @@ image within the image set.''')
                         else:
                             # nindents==1 -> grid
                             item.setData(0, QtCore.Qt.UserRole, params)
+
                         self._changeVerifiedColor(item)
+
                 last[nindents] = item
                 if params:
                     params = params
@@ -393,27 +497,48 @@ image within the image set.''')
                     item.setData(1, QtCore.Qt.UserRole, params)
 
             # add new items / update existing:
-            treenames = []
-            for ID, param, meas in tree:
-                _addParam(ID, param, 0)
-                treenames.append([ID])
+            IDdict = {}
+            for ID, data, meas in tree:
+                _addParam(ID, data, 0)
+                measdict = {}
+                IDdict[ID] = measdict
+#                 treenames.append([ID])
                 for m, currents in meas:
                     _addParam(m, None, 1)
-                    treenames.append([ID, m])
-                    for c, param in currents:
-                        _addParam(c, param, 2)
-                        treenames.append([ID, m, c])
-            # remove items that are in client but not in server tree:
-            for item, texts in self.list.recursiveItemsText():
-                if texts not in treenames:
-                    p = item.parent()
-                    if not p:
-                        p = root
-                    p.takeChild(p.indexOfChild(item))
-            root.sortChildren(0, QtCore.Qt.AscendingOrder)
+                    curlist = []
+                    measdict[m] = curlist
+                    for current, data in currents:
+                        _addParam(current, data, 2)
+                        curlist.append(current)
 
+            # remove old ones:
+            def iterremove(parent, dic):
+                c = parent.childCount()
+                i = 0
+                while i < c:
+                    child = parent.child(i)
+                    txt = child.text(0)
+                    if isinstance(dic, dict):
+                        iterremove(child, dic[txt])
+                        if not child.childCount():
+                            # ... or empty parent items
+                            parent.removeChild(child)
+                            c -= 1
+                            i -= 1
+                    elif txt not in dic:
+                        # only remove 'current' items
+                        parent.removeChild(child)
+                        c -= 1
+                        i -= 1
+                    i += 1
+
+            iterremove(root, IDdict)
+                    
+            root.sortChildren(0, QtCore.Qt.AscendingOrder)
             self.list.resizeColumnToContents(0)
-            self.list.setCurrentItem(self.list.itemAt(0, 0))
+            if citem is None or citem.parent() is None:
+                self.list.setCurrentItem(self.list.itemAt(0, 0))
+        self.toggleShowTab(show)
 
     def modules(self):
         '''
@@ -429,7 +554,7 @@ image within the image set.''')
 
     def _toggleVerified(self):
         item = self._getIDmeasCur()[2]
-        data = item.data(0,  QtCore.Qt.UserRole)
+        data = item.data(0, QtCore.Qt.UserRole)
         v = data['verified'] = not data['verified']
         item.setData(0, QtCore.Qt.UserRole, data)
 
@@ -443,7 +568,7 @@ image within the image set.''')
             self.btn_markCurrentDone.setText('Mark verified    ')
 
     def _changeVerifiedColor(self, item):
-        data = item.data(0,  QtCore.Qt.UserRole)
+        data = item.data(0, QtCore.Qt.UserRole)
         if data is None or 'verified' not in data:
             return
         if data['verified']:
@@ -460,6 +585,8 @@ image within the image set.''')
             if parent.childCount() == 1:
                 item = parent
                 item.setForeground(0, color)
+            else:
+                break
 
     def _acceptAll(self):
         reply = QtWidgets.QMessageBox.question(
@@ -488,45 +615,17 @@ image within the image set.''')
                 out['grid'][path] = data  # ['verified']
         self.gui.server.submitChanges(json.dumps(out) + '<EOF>')
 
-    def config(self):
-        return {}  # 'name': self.camOpts.currentText()}
-
-    def restore(self, c):
-        pass
-#         self.camOpts.addItem(c['name'])
-#         self.camOpts.setCurrentIndex(self.camOpts.count() - 1)
+#     def config(self):
+#         return {}
+#     def restoreState(self, c):
+#         pass
 
 
 if __name__ == '__main__':
-    import sys
     from fancytools.os.PathStr import PathStr
+    from client.Application import Application
 
-    #######################
-    # temporary fix: app crack doesnt through exception
-    # https://stackoverflow.com/questions/38020020/pyqt5-app-exits-on-error-where-pyqt4-app-would-not
-    sys.excepthook = lambda t, v, b: sys.__excepthook__(t, v, b)
-    #######################
-    app = QtWidgets.QApplication([])
+    app = Application()
     w = TabCheck()
-
-    imgs = PathStr(
-        r'D:\Measurements\TrinaPID_EL\EL\source\02ND ROUND\8A').files()
-#     w.addImgs(imgs)
-
-#     w.buildTree('''ID1 {"grid":[6,10], "sublines":[[],[]]}
-#     meas1 {"vertices":[[[0, 0], [2, 0], [1, 1], [0, 1]]], "validated":0}
-#         cur1
-#         cur2
-#     mea2 {"vertices":[[[0, 0], [2, 0], [1, 1], [0, 1]]], "validated":0}
-#         cur1
-#         cur2
-# ID2
-# ID3
-# ''')
-
-
-#     childItem = QtWidgets.QTreeWidgetItem(w.list.item(0))
-#     w.list.item(0).insertChild(0, 'ss')
-
     w.show()
     app.exec_()

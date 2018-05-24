@@ -1,32 +1,24 @@
 # -*- coding: utf-8 -*-
 from PyQt5 import QtWidgets, QtCore, QtGui
 
-# LOCAL
 from client.widgets.ButtonGroupBox import ButtonGroupBox
-# import json
-# from items import FilenamesValidator
 
 
 class PNameValidator(QtGui.QValidator):
-    #     def __init__(self):
-    #         QtGui.QValidator.__init__(self)
 
     def validate(self, txt, pos):
         txt, pos = QtGui.QValidator.validate(self, txt, pos)
-        print(len(txt))
         if 0 < len(txt) < 500 and txt != '[current]':
-            #         if len(txt) and len(txt) == len(txt.encode()):
             # only allow asci txt
             return QtGui.QValidator.Acceptable, pos
-        print(777)
         return QtGui.QValidator.Invalid, pos
 
 
 class Projects(QtWidgets.QWidget):
     '''
-    TODO
+    todo: writeexplanatory text here
     '''
-
+    
     def __init__(self, gui):
         super().__init__()
         self.gui = gui
@@ -58,11 +50,10 @@ class Projects(QtWidgets.QWidget):
         l1.addWidget(lab)
         l1.addWidget(cb)
         l1.addWidget(btn)
-
         lay.addLayout(l1)
 
         self._labInfo = QtWidgets.QLabel()
-        box = ButtonGroupBox()
+        box = ButtonGroupBox(topleft=False)
         box.btn.setIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_TitleBarCloseButton))
         box.btn.clicked.connect(self._removeProject)
@@ -90,26 +81,23 @@ class Projects(QtWidgets.QWidget):
         res = QtWidgets.QMessageBox.question(
             self, 'Remove project "%s"' % name, 'Are you sure?')
         if res == QtWidgets.QMessageBox.Yes:
-            #             ps = [self._cb.itemText(i) for i in range(self._cb.count())]
-            #             ps.remove(name)
             self.gui.server.projectRemove()
             self._cb.removeItem(self._cb.currentIndex())
-            self._changeProject()  # self.gui.server.projectName()
+            self._changeProject()
 
     def _changeProject(self, index=None):
         if index is None:
             name = self._cb.currentText()
         else:
             name = self._cb.itemText(index)
-
         if not name:
             return
+        
         self.gui.server.projectSet(name)
         self._updateProjectInfo()
 
-#         self.gui.changeProject(name)
         self.gui.updateWindowTitle(project=name)
-        self.gui.loadConfig()
+        self.gui.restoreConfigFromServer()
         self.gui.tabCheck.checkUpdates()
         self.gui.updateProjectFolder()
         self.gui.tabDownload.fileTableView.rootPathChanged()
@@ -131,22 +119,14 @@ class Projects(QtWidgets.QWidget):
 
     def _renameProject(self):
         name = self._cb.currentText()
-        #         self._cb.setItemText(self._cb.currentIndex(), name)
         self.gui.server.projectRename(name)
         self.gui.updateWindowTitle(project=name)
 
 
 if __name__ == '__main__':
-    import sys
+    from client.Application import Application
 
-    #######################
-    # temporary fix: app crack doesnt through exception
-    # https://stackoverflow.com/questions/38020020/pyqt5-app-exits-on-error-where-pyqt4-app-would-not
-    sys.excepthook = lambda t, v, b: sys.__excepthook__(t, v, b)
-    #######################
-    app = QtWidgets.QApplication([])
-
+    app = Application()
     w = Projects(None)
-
     w.show()
     app.exec_()

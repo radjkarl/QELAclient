@@ -2,10 +2,46 @@
 '''
 various image transformation functions
 '''
-from __future__ import division
 
 import numpy as np
-import cv2
+
+
+def uintMaxVal(dtype):
+    '''returns largest possible value of given type'''
+    return 2 ** (np.dtype(dtype).itemsize * 8) - 1
+
+
+def _prepRange(range, img, dtype, b):
+    mn, mx = range
+    if b is None:
+        b = uintMaxVal(dtype)
+    img = np.array(img, dtype=float)
+    return mn, mx, img, b
+
+
+def applyRange(img, range, dtype, b=None):
+    mn, mx, img, b = _prepRange(range, img, dtype, b)
+    if mx != mn:
+        img -= mn
+        img *= b / (mx - mn)
+    elif mx != 0:
+        img *= b / mx
+    return np.clip(img, 0, b)
+
+
+def reverseRange(img, range, dtype=None, b=None):
+    '''
+    a = np.array([1, 4, 8])
+    b = applyRange(a, (-1, 8), np.uint8)
+    c = reverseRange(b, (-1, 8), np.uint8)
+    assert np.allclose(a , c)
+    '''
+    if dtype is None:
+        dtype = img.dtype
+    mn, mx, img, b = _prepRange(range, img, dtype, b)
+    img *= (mx - mn) / b  # scale 0...1
+    img += mn
+    return img
 
 
 def toUIntArray(img, dtype=None, cutNegative=True, cutHigh=True,
@@ -29,24 +65,19 @@ def toUIntArray(img, dtype=None, cutNegative=True, cutHigh=True,
         dtype = np.uint16 if mx > 255 else np.uint8
 
     dtype = np.dtype(dtype)
-    if dtype == img.dtype:
+    
+    if dtype == img.dtype and range is None:
         return img
 
-    # get max px value:
-    b = {'uint8': 255,
-         'uint16': 65535,
-         'uint32': 4294967295,
-         'uint64': 18446744073709551615}[dtype.name]
+    assert dtype.kind == 'u', 'dtype has to be uint#'
+
+    b = uintMaxVal(dtype)
 
     if copy:
         img = img.copy()
 
     if range is not None:
-        img = np.asfarray(img)
-        img -= mn
-        img *= b / (mx - mn)
-        img = np.clip(img, 0, b)
-
+        img = applyRange(img, (mn, mx), dtype, b)
     else:
         if cutNegative:
             with np.errstate(invalid='ignore'):
@@ -58,7 +89,7 @@ def toUIntArray(img, dtype=None, cutNegative=True, cutHigh=True,
                 img -= mn  # set minimum to 0
 
         if cutHigh:
-            #ind = img > b
+            # ind = img > b
             with np.errstate(invalid='ignore'):
                 img[img > b] = b
         else:
@@ -78,10 +109,10 @@ def toFloatArray(img):
     transform an unsigned integer array into a
     float array of the right size
     '''
-    _D = {1: np.float32,  # uint8
-          2: np.float32,  # uint16
-          4: np.float64,  # uint32
-          8: np.float64}  # uint64
+    _D = {1: np.float32,  # (u)int8
+          2: np.float32,  # (u)int16
+          4: np.float64,  # (u)int32
+          8: np.float64}  # (u)int64
     return img.astype(_D[img.itemsize])
 
 
@@ -96,6 +127,13 @@ def toNoUintArray(arr):
                           2: np.int32,
                           4: np.int64}[d.itemsize])
     return arr
+
+
+def isImage(img):
+    return (img.ndim == 2 or (img.ndim == 3 
+                              and img.shape[2] in (3, 4))  # RGB or RGBa
+            and img.shape[0] > 0 and img.shape[1] > 0 
+            )
 
 
 def isColor(img):
@@ -129,10 +167,12 @@ def toGray(img):
     '''
     if not isColor(img):
         return img
-    return np.average(img, axis=-1, weights=(0.299,  # red
-                                             0.587,  # green
-                                             0.114)  # blue
-                      ).astype(img.dtype)
+    w = [0.299,  # red
+             0.587,  # green
+             0.114]  # blue
+    if img.shape[2] == 4:
+        w.append(1)  # alpha
+    return np.average(img, axis=-1, weights=w).astype(img.dtype)
 
 
 def rgChromaticity(img):
@@ -190,9 +230,10 @@ def rot90(img):
     s = img.shape
     if len(s) == 3:
         if s[2] in (3, 4):  # color image
-            out = np.empty((s[1], s[0], s[2]), dtype=img.dtype)
-            for i in range(s[2]):
-                out[:, :, i] = np.rot90(img[:, :, i])
+            return np.rot90(img, axes=(1, 2))
+#             out = np.empty((s[1], s[0], s[2]), dtype=img.dtype)
+#             for i in range(s[2]):
+#                 out[:, :, i] = np.rot90(img[:, :, i])
         else:  # mutliple grayscale
             out = np.empty((s[0], s[2], s[1]), dtype=img.dtype)
             for i in range(s[0]):
@@ -208,46 +249,3 @@ def rot90(img):
         NotImplemented
     return out
 
-
-CMAPS = {'flame': (
-    # taken from pyqtgraph GradientEditorItem
-    (0, (0, 0, 0)),
-    (0.2, (7, 0, 220)),
-    (0.5, (236, 0, 134)),
-    (0.8, (246, 246, 0)),
-    (1.0, (255, 255, 255))),
-    'green_yellow_red': (
-    (0, (0, 255, 0)),
-    (0.5, (255, 255, 0)),
-    (1.0, (255, 0, 0)))
-}
-
-
-def applyColorMap(gray, cmap='flame'):
-    '''
-    like cv2.applyColorMap(im_gray, cv2.COLORMAP_*) but with different color maps
-    '''
-    # TODO:implement more cmaps
-#     if cmap != 'flame':
-#         raise NotImplemented
-    # TODO: make better
-    mx = 256  # if gray.dtype==np.uint8 else 65535
-    lut = np.empty(shape=(256, 3))
-    cmap = CMAPS[cmap]
-    # build lookup table:
-    lastval, lastcol = cmap[0]
-    for step, col in cmap[1:]:
-        val = int(step * mx)
-        for i in range(3):
-            lut[lastval:val, i] = np.linspace(
-                lastcol[i], col[i], val - lastval)
-
-        lastcol = col
-        lastval = val
-
-    s0, s1 = gray.shape
-    out = np.empty(shape=(s0, s1, 3), dtype=np.uint8)
-
-    for i in range(3):
-        out[..., i] = cv2.LUT(gray, lut[:, i])
-    return out

@@ -7,10 +7,11 @@ from client import PATH
 
 
 class Contact(QtWidgets.QWidget):
+
     def __init__(self, gui=None):
         super().__init__()
         self.setWindowTitle('Write mail to admin')
-        self.resize(355, 480)
+        self.resize(400, 250)
         if gui:
             self.setWindowIcon(gui.windowIcon())
         self.gui = gui
@@ -23,8 +24,20 @@ class Contact(QtWidgets.QWidget):
         self.btnSubmit.clicked.connect(self._submit)
 
         self.editor = FwMinimalTextEditor()
-        self.editor.text.setPlaceholderText('Your message')
+        self.editor.text.setPlaceholderText('''Your message.
+Please include information on ...
+* Module ID
+* Measurement number and current
+
+The nature of the problem e.g.: 
+* features are always detected wrong
+* image correction looks odd
+* no image visible
+* error occurs 
+
+You can add a screenshot of your problem using the <Snipping tool> (top right)''')
         self.editor.text.textChanged.connect(self._checkSubmit)
+        self.editor
         l1 = QtWidgets.QHBoxLayout()
         self.subject = QtWidgets.QLineEdit()
         self.subject.setPlaceholderText("Subject")
@@ -72,11 +85,18 @@ You can find the logs file at %s''' % self.logsfolder)
 
 if __name__ == '__main__':
     import sys
+    from PyQt5 import QtCore
     #######################
     # temporary fix: app crack doesnt through exception
     # https://stackoverflow.com/questions/38020020/pyqt5-app-exits-on-error-where-pyqt4-app-would-not
     sys.excepthook = lambda t, v, b: sys.__excepthook__(t, v, b)
     #######################
+
+    QA = QtWidgets.QApplication
+    # enable HD DPI monitor support:
+    QA.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QA.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+
     app = QtWidgets.QApplication([])
     w = Contact()
     w.show()

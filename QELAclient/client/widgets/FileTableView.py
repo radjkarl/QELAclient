@@ -4,6 +4,7 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 from fancytools.os.PathStr import PathStr
 from fancytools.os import fileSize as fs
 from fancytools.utils.dateStr import dateStr
+from client.widgets._Base import QMenu
 
 
 class SortTable(QtWidgets.QTableWidget):
@@ -122,20 +123,24 @@ class FileTableView(SortTable):
     COL_OUTDATED = QtGui.QColor(229, 83, 0)  # dark orange
     COL_NOTEXISTANT = QtCore.Qt.darkGreen
 
-    def __init__(self, labels, fnOpen, fnDownload):
+    def __init__(self, labels, fnOpen, fnDownload, fnVerify=None):
         self._n = len(labels)
-        labels.extend(['File',  'Local date', 'Server date', 'Size'])
+        labels.extend(['File', 'Local date', 'Server date', 'Size'])
         super().__init__(labels)
         self.setSelectionBehavior(self.SelectRows)
+        
         self.fnOpen = fnOpen
         self.fnDownload = fnDownload
-
-        self._menu = m = QtWidgets.QMenu()
+        self.fnVerify = fnVerify        
+        
+        self._serverfiles = []
+        self._menu = m = QMenu()
         m.addAction('Open selected file(s)').triggered.connect(
             self._openSelected)
         m.addAction("Open folder(s)").triggered.connect(self._openFolders)
         m.addAction("Copy selected file(s) into new folder").triggered.connect(
             self._copyToNewFolder)
+        self.horizontalHeader().setDefaultAlignment(QtCore.Qt.AlignLeft)
 
     def pathSplit(self, path):
         return PathStr.splitNames(path)
@@ -150,12 +155,25 @@ class FileTableView(SortTable):
     def _copyToNewFolder(self):
         f = QtWidgets.QFileDialog.getExistingDirectory()
         if f:
-            m = self.selectionModel()
-            for index in m.selectedRows():
-                y = index.row()
-                path = self._path2(y)
-                self._root.join(path).copy(PathStr(f).join(path.basename()))
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl(f))
+            self._tempF = f
+            self._downloadDone_backup = self._downloadDone
+            self._downloadDone = self._docopyToNewFolder
+            done = self._openSelected(open=False, silent=True)
+            if done:
+                self._docopyToNewFolder()
+            
+    def _docopyToNewFolder(self):
+        self.setEnabled(True)
+        f = self._tempF
+        m = self.selectionModel()
+        for index in m.selectedRows():
+            y = index.row()
+            path = self._path2(y)
+            self._root.join(path).copy(PathStr(f).join(path.basename()))
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(f))
+        self._downloadDone = self._downloadDone_backup
+        del self._tempF
+        del self._downloadDone_backup
 
     def _openFolders(self):
         m = self.selectionModel()
@@ -174,38 +192,65 @@ class FileTableView(SortTable):
                 pp.append(txt)
         return self.pathJoin(pp)
 
-    def _openSelected(self):
+    def _openSelected(self, open=True, silent=False):  # TODO: rename
+        '''
+        returns Flase if is downloading and True is is ready
+        '''
         toDownload, downIndices = [], []
+
+        def openFile(path):
+            if open:
+                fullpath = self._root.join(path)
+                self.fnOpen(fullpath)
+
+        def fileVerified(path):
+            # check signature of local file, if cannot be verified, download again
+            if self.fnVerify is None:
+                return True
+            return self.fnVerify(path)
+
+        def addDownload(path, y): 
+            toDownload.append(path)
+            downIndices.append(y)
+            
+        QQ = QtWidgets.QMessageBox
+        
         m = self.selectionModel()
         for index in m.selectedRows():
             y = index.row()
             path = self._path2(y)
-            fullpath = self._root.join(path)
-            col = self.item(y, 0).foreground()
-            if col == self.COL_OUTDATED:
-                m.select(index, m.ClearAndSelect
-                         | m.Rows)
-                self.scrollTo(index)
-                QQ = QtWidgets.QMessageBox
-                msgBox = QQ()
-                msgBox.setText("The locally file is outdated.")
-                msgBox.setInformativeText(
-                    "Download newer version from server?")
-                msgBox.setStandardButtons(QQ.Ok | QQ.Cancel)
-                msgBox.setDefaultButton(QQ.Ok)
-                ret = msgBox.exec_()
-                if ret == QQ.Ok:
-                    toDownload.append(path)
-                    downIndices.append(y)
+            color = self.item(y, 0).foreground()
+            if color == self.COL_OUTDATED:  # file exists but is outdated
+                if silent:
+                    ret = QQ.Yes
                 else:
-                    self.fnOpen(fullpath)
-            elif col == self.COL_NOTEXISTANT:
-                toDownload.append(path)
-                downIndices.append(y)
-            else:
-                self.fnOpen(fullpath)
+                    m.select(index, m.ClearAndSelect | m.Rows)
+                    self.scrollTo(index)
+                    msgBox = QQ()
+                    msgBox.setWindowTitle('Open file...')
+                    msgBox.setText("The file on your PC is out of date.")
+                    msgBox.setInformativeText(
+                        "Download latest version from server?")
+                    msgBox.setStandardButtons(QQ.Yes | QQ.No)
+                    msgBox.setDefaultButton(QQ.Yes)
+                    ret = msgBox.exec_()
+                if ret == QQ.Yes or not fileVerified(path):
+                    addDownload(path, y)
+                else:
+                    openFile(path)
+                    
+            elif color == self.COL_NOTEXISTANT:  # no local file
+                addDownload(path, y)
+            else:  # exists and is up-to-date
+                if not fileVerified(path):
+                    addDownload(path, y)
+                else:
+                    openFile(path)
+                
         if toDownload:
-            self._download(toDownload, downIndices)
+            self._download(toDownload, downIndices, open)
+            return False
+        return True
 
     def sync(self):
         toDownload, downIndices = [], []
@@ -293,6 +338,7 @@ class FileTableView(SortTable):
         changed = False
         for f, date, size in serverfiles:
             ss = self.pathSplit(f)
+            
             date = dateStr(float(date))
 
             row = self._findFile(ss)
@@ -301,7 +347,7 @@ class FileTableView(SortTable):
                 changed = True
                 row = self.rowCount()
                 self.setRowCount(row + 1)
-                newss = ss[:-1]
+                newss = ss[:-1]  # remove file size
                 if len(ss) < cc:
                     newss.extend([''] * (cc - len(ss)))
                 newss.extend((ss[-1], '', date, size))
@@ -320,6 +366,7 @@ class FileTableView(SortTable):
         '''returns 2d array of all files in [rootpath], splitted by folder'''
         self._root = rootpath
         f = list(PathStr(rootpath).nestedFiles(includeroot=False))
+        f = [fi for fi in f if not fi.isHidden()]
         data = [self.pathSplit(fi) for fi in f]
         dates = [dateStr(rootpath.join(fi).date()) for fi in f]
         sizes = [fs.toStr(rootpath.join(fi).size()) for fi in f]

@@ -1,44 +1,26 @@
-from PyQt5 import QtWidgets, QtCore, QtGui
-from datetime import datetime
 import numpy as np
-
+from datetime import datetime
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 from fancytools.utils import json2 as json
 from fancytools.os.PathStr import PathStr
 
 from imgProcessor.utils.metaData import metaData
 
-
 # local
 from client.widgets.GridEditor import GridEditorDialog
 from client.parsePath import CAT_FUNCTIONS, parsePath, toRow
+from client.widgets.base.Table import Table
 
-MATRIX_HEADER = ['Path', "Measurement Index", "M. name",
-                 "Module ID", 'Current [A]',  # 'I. number',
-                 'Date', 'Exposure time [s]', 'ISO(Gain)', 'f-number', 'Options']
-MATRIX_HEADER_WIDTH = [335, 120, 57, 80, 70, 130, 104, 64, 62]
-
-DELIMITER = ';'
-
-# CATEGORIES = (
-#     (True, "Meas. number and name [##Name]", "Date"),  # Measurement
-#     (True, 'Current [#A]'),  # Current
-#     (True, 'Module [Name]',),  # ID
-#     #     ('Exposure time [_e#.file]',),  # exposure time ##TODO
-#     (False, 'Exposure time [#s]',),  # exposure time
-# )
-
-
-# DELIMITER = ',\t'
-
-
-# def argmin(l):
-#     '''numpy-free version of argmin'''
-#     mindist = min(l)
-#     for i, d in enumerate(l):
-#         if d == mindist:
-#             break
-#     return i
+MATRIX_HEADER = ['Path',
+                  "Measurement name",
+                 "Module ID", 'Current [A]', 'Date', 'Exposure time [s]',
+                 'ISO(Gain)', 'f-number', 'Options']
+MATRIX_HEADER_WIDTH = [335, 120,
+                       # 57,
+                        80, 70, 110, 100, 64, 62]
+MANDATORY_COLS = [2, 3, 4]
+DELIMITER = ',\t'
 
 
 class _OnlyIntDelegate(QtWidgets.QItemDelegate):
@@ -62,18 +44,116 @@ class _OnlyNumberDelegate(QtWidgets.QItemDelegate):
 class _OnlyDateDelegate(QtWidgets.QItemDelegate):
 
     def createEditor(self, parent, *_args, **_kwargs):
-        le = QtWidgets.QDateTimeEdit(QtCore.QDate.currentDate(), parent)
-        le.setDisplayFormat("yyyy.MM.dd HH:mm:ss")
+        le = QtWidgets.QDateTimeEdit(parent)
+        le.setDisplayFormat("yyyy/MM/dd HH:mm:ss")
+        le.setDateTime(QtCore.QDateTime.currentDateTime())
         return le
 
+    def setModelData(self, editor, model, index): 
+        editor.interpretText()  # needed, otherwise jumps to am/pm, depending on locale
+        model.setData(index, editor.text(), QtCore.Qt.EditRole)
 
-class _TableBase(QtWidgets.QTableWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
 
-        self.horizontalHeader().setStretchLastSection(True)
+class ImageTable(Table):
+    filled = QtCore.pyqtSignal()  # whether to modify contents 
+    sigIsEmpty = QtCore.pyqtSignal()
+
+    def __init__(self, imgTab):
+        super().__init__(1, len(MATRIX_HEADER))  # int rows, int columns
+
         self.cellDoubleClicked.connect(self._cellDoubleClicked)
         self.currentCellChanged.connect(self._showPreview)
+
+        self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.showContextMenu)
+
+        self.setTextElideMode(QtCore.Qt.ElideLeft)
+        self.itemChanged.connect(self._updateRowNumberColor)
+
+        # draw top header frame :
+        header = self.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setDefaultAlignment(QtCore.Qt.AlignLeft)
+        header.setFrameStyle(QtWidgets.QFrame.Box | QtWidgets.QFrame.Plain)
+        header.setLineWidth(1)
+        self.setHorizontalHeader(header)
+
+        self.setHorizontalHeaderLabels(MATRIX_HEADER)
+        for col in MANDATORY_COLS:
+            item = self.horizontalHeaderItem(col)
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            self.setHorizontalHeaderItem(col, item)
+        for col, tip in {1:'''If left empty: measurement name is set to measurement date. 
+In other words: A measurement will be defined as all images taken of one module at the same date'''}.items():
+            item = self.horizontalHeaderItem(col)
+            item.setToolTip(tip)
+
+        [self.setColumnWidth(n, width)
+         for n, width in enumerate(MATRIX_HEADER_WIDTH)]
+        self._showOptionsColumn(False)
+
+        self.cbMetaData = imgTab.cbMetaData
+        self.gui = imgTab.gui
+        self.drawWidget = imgTab.dragW
+
+        self.drawWidget.changed.connect(self.valsFromPath)
+        self.filled.connect(self.valsFromPath)
+        
+        self.threadAddMetadata = None
+        self.paths = []
+
+        # need to add to self, otherwise garbage collector removes delegates
+        self._delegates = {  # 1: _OnlyIntDelegate(),  # measurement number
+                           3: _OnlyNumberDelegate(),  # current
+                           4: _OnlyDateDelegate(),  # date
+                           5: _OnlyNumberDelegate(),  # exp time
+                           6: _OnlyNumberDelegate(),  # iso
+                           7: _OnlyNumberDelegate()  # fnumber
+                           }  
+
+        for i, d in self._delegates.items():
+            self.setItemDelegateForColumn(i, d)
+
+        self.hide()
+        self.setRowCount(0)
+
+    def uploadStart(self):
+        self.currentCellChanged.disconnect(self._showPreview)
+        self._closePreview()
+        self.insertColumn(0)
+        
+    def uploadUpdate(self, index, val):
+#         if val != 100:
+        # show a progress bar  is every top  table cell that is being uploaded:
+        bar = self.cellWidget(index, 0)
+        if not bar:
+            bar = QtWidgets.QProgressBar()
+            self.setCellWidget(index, 0, bar)
+            # hide all top rows:
+            [self.hideRow(i) for i in range(index)]
+            bar.setValue(val)
+    
+        i, j = index + 1, len(self.paths)
+        b = self.gui.progressbar
+        b.bar.setValue(100 * i / j)
+        b.bar.setFormat("Uploading image %i/%i" % (i, j))
+
+    def uploadDone(self, hide=True):
+        self.removeColumn(0)
+        if hide:
+            self.clearContents()
+            self.hide()
+        else:
+            show()
+        self.currentCellChanged.connect(self._showPreview)
+
+    def uploadCancel(self):
+        self.removeColumn(0)
+
+        for row in range(self.rowCount()):
+            self.showRow(row)
 
     def _applyForAll(self):
         txt = self.currentItem().text()
@@ -81,47 +161,36 @@ class _TableBase(QtWidgets.QTableWidget):
         for row in range(self.rowCount()):
             self.item(row, col).setText(txt)
 
-    def keyPressEvent(self, evt):
-        if evt.matches(QtGui.QKeySequence.Delete):
-            for ran in self.selectedRanges():
-                for row in range(ran.bottomRow(), ran.topRow() - 1, -1):
-                    self.removeRow(row)
-        elif evt.matches(QtGui.QKeySequence.SelectAll):
-            self.selectAll()
-        elif evt.matches(QtGui.QKeySequence.Copy):
-            self.copyToClipboard()
-        else:
-            super().keyPressEvent(evt)
+    def _selectAllOfCurrentValue(self):
+        txt = self.currentItem().text()
+        col = self.currentColumn()
+# #         self.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
+#         self.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectItems)
+        rows = []
+        for row in range(self.rowCount()):
+            if self.itemText(row, col) == txt:
+                rows.append(row)
+#                 self.selectRow(row)
 
-    def copyToClipboard(self, cellrange=None):
-        if cellrange is None:
-            cellrange = self.selectedRanges()[0]
-        # deselect all other ranges, to show shat only the first one will
-        # copied
-        for otherRange in self.selectedRanges()[1:]:
-            self.setRangeSelected(otherRange, False)
-        nCols = cellrange.columnCount()
-        nRows = cellrange.rowCount()
-        if not nCols or not nRows:
-            return
-        text = ''
-        lastRow = nRows + cellrange.topRow()
-        lastCol = nCols + cellrange.leftColumn()
-        for row in range(cellrange.topRow(), lastRow):
-            for col in range(cellrange.leftColumn(), lastCol):
-                item = self.item(row, col)
-                if item:
-                    text += str(item.text())
-                if col != lastCol - 1:
-                    text += '\t'
-            text += '\n'
-        QtWidgets.QApplication.clipboard().setText(text)
+        indexes = [self.model().index(r, 0) for r in rows]
+        mode = QtCore.QItemSelectionModel.Select | QtCore.QItemSelectionModel.Rows
+        [self.selectionModel().select(i, mode) for i in indexes]
+
+#         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        
+    def _invertSelection(self):
+        model = self.model()
+        for i in range(model.rowCount()):
+            for j in range(model.columnCount()):
+                ix = model.index(i, j)
+                self.selectionModel().select(ix, QtCore.QItemSelectionModel.Toggle)
 
     def removeRow(self, row):
         self.paths.pop(row)
         super().removeRow(row)
         if not len(self.paths):
             self.sigIsEmpty.emit()
+            self._showOptionsColumn(False)
 
     def clearContents(self):
         for row in range(len(self.paths) - 1, -1, -1):
@@ -160,27 +229,45 @@ class _TableBase(QtWidgets.QTableWidget):
             pass
         super().wheelEvent(evt)
 
-    def _doShowPreview(self, path, row, pixmap):
+    def _openNextRow(self):
+        r = self.currentRow()
+        if r < self.rowCount() - 1:
+            self.selectRow(r + 1)
+            path = self.item(r + 1, 0).text()
+            self._open(path)
 
+    def _open(self, path):
+        self.gui.openImage(path, prevFn=self._openPrevRow,
+                               nextFn=self._openNextRow)
+
+    def _openPrevRow(self):
+        r = self.currentRow()
+        if r > 0:
+            self.selectRow(r - 1)
+            path = self.item(r - 1, 0).text()
+            self._open(path)
+
+    def _doShowPreview(self, path, row, pixmap):
         if pixmap and row == self.currentRow():
             lab = self._tempIconWindow = QtWidgets.QLabel()
 
-            lab.mouseDoubleClickEvent = lambda _evt, path=path: \
-                self.gui.openImage(path)
+            lab.mouseDoubleClickEvent = lambda _evt, path = path: \
+                self._open(path)
 
             lab.setPixmap(pixmap)
             lab.setWindowFlags(QtCore.Qt.FramelessWindowHint
                                | QtCore.Qt.SubWindow
                                )
             lab.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
+            
             p0 = self.mapToGlobal(self.parent().pos())
-
-            p1 = QtCore.QPoint(- pixmap.size().width(),
+            p1 = QtCore.QPoint(0,  # -pixmap.size().width(),
                                self.rowViewportPosition(self._Lrow))
 #                 del self._Lrow
 
-            self._prefWinFn = lambda p, p1=p1: lab.move(
+            self._prefWinFn = lambda p, p1 = p1: lab.move(
                 p + p1 + self.mapTo(self.gui, self.parent().pos()))
+            
             self.gui.sigMoved.connect(self._prefWinFn)
             self.gui.tabs.currentChanged.connect(self._closePreview)
 
@@ -203,77 +290,33 @@ class _TableBase(QtWidgets.QTableWidget):
         self._closePreview()
         # show an image preview
         if col == 0:
-            path = self.item(row, col).text()
-            self._Lrow = row
-            # load image in thread to not block GUI:
-            self._L = _LoadPreviewThread(path, row)
-            self._L.sigDone.connect(self._doShowPreview)
-            self._L.start()
+            r = self.selectedRanges()
+            # check whether only one cell (and not whole row) selected:
+            if r and r[0].rowCount() == 1 and r[0].columnCount() == 1:
+                path = self.item(row, col).text()
+                self._Lrow = row
+                # load image in thread to not block GUI:
+                self._L = _LoadPreviewThread(path, row)
+                self._L.sigDone.connect(self._doShowPreview)
+                self._L.start()
 
     def _cellDoubleClicked(self, row, col):
         if col == 0:
             path = self.item(row, col).text()
-            self.gui.openImage(path)
+            self._open(path)
 
-
-# class CRFTable(_TableBase):
-#     # camera response function upload
-#     def __init__(self):
-#         super().__init__(1, 2)  # int rows, int columns
-
-
-class ImageTable(_TableBase):
-    filled = QtCore.pyqtSignal(bool)  # success
-    sigIsEmpty = QtCore.pyqtSignal()
-
-    def __init__(self, imgTab):
-        super().__init__(1, len(MATRIX_HEADER))  # int rows, int columns
-        self.setTextElideMode(QtCore.Qt.ElideLeft)
-
-        # draw top header frame :
-        header = self.horizontalHeader()
-        header.setFrameStyle(QtWidgets.QFrame.Box | QtWidgets.QFrame.Plain)
-        header.setLineWidth(1)
-        self.setHorizontalHeader(header)
-
-        [self.setColumnWidth(n, width)
-         for n, width in enumerate(MATRIX_HEADER_WIDTH)]
-        self._showOptionsColumn(False)
-
-        self.cbMetaData = imgTab.cbMetaData
-        self.gui = imgTab.gui
-        self.drawWidget = imgTab.dragW
-
-        self.setHorizontalHeaderLabels(MATRIX_HEADER)
-        self.drawWidget.changed.connect(self.valsFromPath)
-        self.filled.connect(self.valsFromPath)
-
-        self.paths = []
-
-        # need to add to self, otherwise garbage collector removes delegates
-        self._delegates = {1: _OnlyIntDelegate(),  # measurement number
-                           4: _OnlyNumberDelegate(),  # current
-                           5: _OnlyDateDelegate(),  # date
-                           6: _OnlyNumberDelegate(),  # exp time
-                           7: _OnlyNumberDelegate(),  # iso
-                           8: _OnlyNumberDelegate()}  # fnumber
-
-        for i, d in self._delegates.items():
-            self.setItemDelegateForColumn(i, d)
-
-        self.hide()
-        self.setRowCount(0)
-
-    def hasEmptyCells(self, select=True) -> bool:
+    def hasEmptyCells(self, cols=None, select=True) -> bool:
         '''
         returns whether table contains empty cells
 
         if <select> == True: select all empty cells
         '''
+        if cols is None:
+            cols = range(1, self.columnCount())
         has_empty = False
         for row in range(self.rowCount()):
             if not self.isRowHidden(row):
-                for col in range(1, self.columnCount()):
+                for col in cols:
                     if not self.isColumnHidden(col):
                         item = self.item(row, col)
                         if not item or not item.text():
@@ -281,8 +324,8 @@ class ImageTable(_TableBase):
                                 return True
                             has_empty = True
                             index = self.model().index(row, col)
-                            self.selectionModel().select(index,
-                                                         QtCore.QItemSelectionModel.Select)
+                            self.selectionModel().select(
+                                index, QtCore.QItemSelectionModel.Select)
         return has_empty
 
     def modules(self):
@@ -290,28 +333,44 @@ class ImageTable(_TableBase):
         return list of module IDs within table
         '''
         ll = set()
+        col = MATRIX_HEADER.index('Module ID')
         for row in range(self.rowCount()):
-            item = self.item(row, 3)
+            item = self.item(row, col)
             if item is not None:
                 ll.add(item.text())
         return ll
 
-    def mousePressEvent(self, event):
-        mouseBtn = event.button()
-        if mouseBtn == QtCore.Qt.RightButton:
-            self._menu = QtWidgets.QMenu()
-            self._menu.addAction(
-                "Manual grid detection").triggered.connect(self._manualGridDetection)
-            self._menu.addAction("Apply for all").triggered.connect(
-                self._applyForAll)
+    def showContextMenu(self, pos):
+        self._menu = self.createContextMenu()
+        self._menu.addAction(
+            "Manual grid detection").triggered.connect(self._manualGridDetection)
+        self._menu.addAction("Invert selection").triggered.connect(self._invertSelection)
+        
+        m = self._menu.addMenu("Current value")  
+        m.addAction("Apply to all").triggered.connect(self._applyForAll)
+        m.addAction("Select all").triggered.connect(self._selectAllOfCurrentValue)
 
-            self._menu.addAction("Remove row"
-                                 ).triggered.connect(lambda: self.removeRow(self.currentRow()))
-            self._menu.addAction("Select all"
-                                 ).triggered.connect(self.selectAll)
+        self._menu.popup(QtGui.QCursor.pos())
 
-            self._menu.popup(event.globalPos())
-        super().mousePressEvent(event)
+    def setReadOnly(self, readonly):
+        if readonly:
+            tr = QtWidgets.QAbstractItemView.NoEditTriggers
+            self.setContextMenuPolicy(QtCore.Qt.NoContextMenu)
+            col = QtGui.QColor(QtCore.Qt.lightGray)
+            for r, c in self.iterInd():
+                self.setCell(r, c).setBackground(col)
+        else:
+            tr = QtWidgets.QAbstractItemView.AllEditTriggers 
+            self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+            col = QtWidgets.QTableWidgetItem().background()  # QtGui.QColor(QtCore.Qt.white)
+            for r, c in self.iterInd():
+                self.setCell(r, c).setBackground(col)
+        self.setEditTriggers(tr)
+
+    def iterInd(self):
+        for row in range(self.rowCount()):
+            for col in range(self.columnCount()):
+                yield row, col
 
     def _manualGridDetection(self):
         row = self.currentRow()
@@ -331,67 +390,59 @@ class ImageTable(_TableBase):
             self.setCell(row, col, json.dumps(g.values))
             self._showOptionsColumn(True)
 
-    def toCSVStr(self):
-        # TODO generate somewhere else - shoudl also work when toCSV not
-        # executed
-        #         self.new_paths = []
-
-        #         with open(path, 'w') as f:
-        #             with open(pathlocal, 'w') as flocal:
+    def toCSVStr(self, local=True):
+        '''
+        local ... whether csv str contains local file paths
+               set to False t anonymize paths to NUMBER.FTYPE 
+        returns:
+            local=True:
+                str, paths
+            local=False
+                str,  new_paths
+        '''
         out = ''
+        new_paths = []
         for row in range(self.rowCount()):
             # only same image index and ftype to protect the clients
             # data"
             path = self.paths[row]
-            new_path = '%i.%s' % (row, path.filetype())
-#             self.new_paths.append(new_path)
-
-            rowl = [new_path]
-            for col in range(1, self.columnCount()):
-                item = self.item(row, col)
-                if item:
-                    rowl.append(str(item.text()))
+            if local:
+                rowl = [path]
+            else:
+                new_path = '%i.%s' % (row, path.filetype())
+                new_paths.append(new_path)
+                rowl = [new_path]
+            for col in range(1, len(MATRIX_HEADER)):
+                rowl.append(self.itemText(row, col))
             rowl.append(str(path.size()))
             line = DELIMITER.join(rowl)
             if line[-1] != '\n':
                 line += '\n'
             out += line
-        return line
-
-    # TODO: remove - not needed
-#     def toCSV(self, path, pathlocal):
-#         # TODO generate somewhere else - shoudl also work when toCSV not
-#         # executed
-#         self.new_paths = []
-#
-#         with open(path, 'w') as f:
-#             with open(pathlocal, 'w') as flocal:
-#                 for row in range(self.rowCount()):
-#                     # only same image index and ftype to protect the clients
-#                     # data"
-#                     path = self.paths[row]
-#                     new_path = '%i.%s' % (row, path.filetype())
-#                     self.new_paths.append(new_path)
-#
-#                     rowl = []
-#                     for col in range(1, self.columnCount()):
-#                         item = self.item(row, col)
-#                         if item:
-#                             rowl.append(str(item.text()))
-#                     rowl.append(str(path.size()))
-#                     line = DELIMITER.join(rowl)
-#                     if line[-1] != '\n':
-#                         line += '\n'
-#                     f.write(new_path + DELIMITER + line)
-#                     flocal.write(path + DELIMITER + line)
+        # remove last \n:
+        if out[-1] == '\n':
+            out = out[:-1]
+        if not local:
+            return out, new_paths
+        return out, self.paths
 
     def fillFromFile(self, path, appendRows=False):
-        with open(path, 'r') as f:
-            lines = [line.split(DELIMITER)
-                     for line in f.readlines()]
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            # using <encoding='utf-8-sig'> to prevent byte order mark (BOM)
+            # which is the odd first sign for csv docs saved by excel
+            lines = f.read().splitlines()
+            if DELIMITER not in lines[0]:
+                # csv not generated by QELA but rather by excel
+                lines = [line.split(',')
+                         for line in lines]
+            else:
+                lines = [line.split(DELIMITER)
+                         for line in lines]                
         return self.fillFromState(lines, appendRows)
 
     def fillFromState(self, lines, appendRows=False):
+        self._allowModelToModifyCells = False
+
         if appendRows:
             row0 = self.rowCount()
         else:
@@ -400,23 +451,27 @@ class ImageTable(_TableBase):
             self.paths = []
         nrows = row0 + len(lines)
         self.setRowCount(nrows)
+        self._new_rows = []
         for row, line in enumerate(lines):
+
             row += row0
             for col, txt in enumerate(line):
-                if txt:
+                if txt != '':
                     self.setCell(row, col, txt)
             item = self.item(row, 0)
             if len(line) and item:
                 self.paths.append(PathStr(item.text()))
                 self._setPathItem(row)
-
+                self._setRowItem(row)
+                self._new_rows.append(row)
             else:
                 nrows -= 1
+            
         self.drawWidget.setExamplePath(self.paths[0])
         self.setRowCount(nrows)
         self._checkShowOptionsColumn()
-
-        self.filled.emit(True)
+        self._new_paths = self.paths[row0:]
+        self.filled.emit()
 
     def _checkShowOptionsColumn(self):
         hasOptions = False
@@ -438,25 +493,41 @@ class ImageTable(_TableBase):
             for row in range(self.rowCount()):
                 item = self.setCell(row, c)
                 self.mkItemReadonly(item)
+        
         self.setColumnHidden(c, not show)  # show/hide options
 
+    def _setRowItem(self, row):
+        # for colored row indices:
+        rowitem = QtWidgets.QTableWidgetItem()
+        # previous row item number:
+        if row == 0:
+            prev = 0
+        else:
+            item = self.verticalHeaderItem(row - 1)
+            if item:
+                prev = int(item.text())
+            else:
+                prev = row - 1
+        rowitem.setText(str(prev + 1))
+        self.setVerticalHeaderItem(row, rowitem)
+
     def fillFromPaths(self, paths):
+        '''
+        paths ... [path/to/img.png, ...]
+        '''
         self.show()
+        self._allowModelToModifyCells = True
         self._new_paths = paths
         row0 = len(self.paths)
         self.setRowCount(len(paths) + row0)
-
         self.drawWidget.setExamplePath(paths[0])
-
         # <<<
         # adds ...
         # - path to FIRST ROWfile
         # - change date
         # row index
-
         offs = len(self.paths)
         self._new_rows = []
-#         colDate = MATRIX_HEADER.index('Date')
         for r, p in enumerate(self._new_paths):
             if p in self.paths:
                 continue  # duplicate found - ignore
@@ -464,71 +535,88 @@ class ImageTable(_TableBase):
             # path[column 0] as read-only and underlined:
             self.paths.append(p)
             self._setPathItem(row, p)
+            self._setRowItem(row)
 
-            # for colored row indices:
-            rowitem = QtWidgets.QTableWidgetItem()
-            # previous row item number:
-            if row == 0:
-                prev = 0
-            else:
-                item = self.verticalHeaderItem(row - 1)
-                if item:
-                    prev = int(item.text())
-                else:
-                    prev = row - 1
-            rowitem.setText(str(prev + 1))
-            self.setVerticalHeaderItem(row, rowitem)
             self._new_rows.append(row)
-
         # >>>
-#         # correct row count:
-#         self.setRowCount(len(self.paths))
 
-#         self.valsFromPath(row0 - 1)
         if self.cbMetaData.isChecked():
             self.addMetaData()
         else:
-            self.filled.emit(self.isVisible())
+            self.filled.emit()
 
     def isEmpty(self):
         return len(self.paths) == 0
 
-    def valsFromPath(self):  # , row0=-1
+    def checkValid(self):
+        optional_cols = list(range(1, self.columnCount()))
+        optional_cols = [c for c in optional_cols if not c in MANDATORY_COLS]
+        
+        if self.hasEmptyCells(MANDATORY_COLS):
+            QtWidgets.QMessageBox.critical(self, "Table has empty cells",
+                             "Please fill out all mandatory cells.",
+                             QtWidgets.QMessageBox.Ok)
+            return False
+        
+        if self.hasEmptyCells(optional_cols):
+            msg = QtWidgets.QMessageBox.warning(self, "Table has empty cells",
+                             """It is recommended to fill every cell. Continue?<br>
+Missing data is treated as follows:<br><br>
+<b>Measurement name:</b><br>
+Is is assumed that all images taken of the same module (ID) <br>
+within one day belong to the same measurement.<br><br>
+<b>Exposure time, ISO, fnumber:</b><br>
+Values are set to 1 <br>
+No exposure value correction can be executed and camera calibration <br>
+might use false parapeters.""",
+                             QtWidgets.QMessageBox.Ok | 
+                             QtWidgets.QMessageBox.Cancel)
+            if msg == QtWidgets.QMessageBox.Cancel:
+                return False
+        return True
+
+    def valsFromPath(self): 
+        colDate = MATRIX_HEADER.index('Date') 
+        for row in range(self.rowCount()):  
+            if self._allowModelToModifyCells:
+                path = PathStr(self.item(row, 0).text())
+                _success, entries = self.drawWidget.model(path)
+
+                for col, e in enumerate(entries):
+                    col += 1
+#                     if e == '':
+#                         item = self.item(row, col)
+#                         if hasattr(item, 'metaText'):
+#                             e = self.item(row, col).metaText
+                    if e != '':
+                        self.setCell(row, col, str(e))
+                # add date from file date is not already given:
+                if not self.itemText(row, colDate):
+                    self.setCell(row, colDate, datetime.fromtimestamp(
+                        path.date()).strftime('%Y/%m/%d %H:%M:%S'))
+#             self._updateRowNumberColor(row)
+            
+    def _updateRowNumberColor(self, item):
+        row = item.row()
         ncol = self.columnCount() - 1  # ignore the options column
-        for row in range(self.rowCount()):  # range(row0 + 1, self.rowCount()) # row0=-1
-            p = self.item(row, 0).text()
-            success, entries = self.drawWidget.model(p)
-#             continue
-            for col, e in enumerate(entries):
-                col += 1
-                if e == '':
-                    item = self.item(row, col)
-                    if hasattr(item, 'metaText'):
-                        e = self.item(row, col).metaText
-
-                self.setCell(row, col, str(e))
-
-            # color row index number:
-            # check if whole row contains data:
-            if '' not in (self.item(row, c).text() for c in range(ncol)):
-                color = QtCore.Qt.darkGreen
-            elif success:
-                color = QtCore.Qt.darkYellow
-            else:
-                color = QtCore.Qt.red
-            rowitem = self.verticalHeaderItem(row)
+        # color row index number:
+        # check if whole row contains data:
+        if '' not in (self.itemText(row, c) for c in range(ncol)):
+            color = QtCore.Qt.darkGreen
+        elif '' not in (self.itemText(row, c) for c in MANDATORY_COLS):
+            color = QtCore.Qt.darkYellow
+        else:
+            color = QtCore.Qt.red
+        rowitem = self.verticalHeaderItem(row)
+        if rowitem:
             rowitem.setForeground(color)
             self.setVerticalHeaderItem(row, rowitem)
 
-    def setCell(self, row, col, txt=None):
+    def itemText(self, row, col):
         item = self.item(row, col)
         if item is None:
-            item = QtWidgets.QTableWidgetItem()
-        if txt is not None:
-            item.setText(txt)
-        self.setItem(row, col, item)
-
-        return item
+            return ''
+        return item.text()
 
     def mkItemReadonly(self, item):
         flags = item.flags()
@@ -538,78 +626,23 @@ class ImageTable(_TableBase):
 
     def _setPathItem(self, row, path=None):
         item = self.setCell(row, 0, path)
-        item.setTextAlignment(QtCore.Qt.AlignRight)
+        item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         self.mkItemReadonly(item)
         f = item.font()
         f.setUnderline(True)
         item.setFont(f)
 
-#     def fill(self):  # TODO: rename
-#         '''
-#         adds ...
-#         - path to FIRST ROWfile
-#         - change date
-#         - row index
-#         '''
-#                            # self.dragW.setExamplePath(pathimgs[0])
-#
-#         offs = len(self.paths)
-#         self._new_rows = []
-# #         colDate = MATRIX_HEADER.index('Date')
-#         for r, p in enumerate(self._new_paths):
-#             if p in self.paths:
-#                 continue  # duplicate found - ignore
-# #                 # override, if duplicate path found
-# #                 row = self.paths.index(p)
-# #             else:
-#             row = r + offs
-#             # path[column 0] as read-only and underlined:
-#             self.paths.append(p)
-#             self._setPathItem(row, p)
-#
-#             # add file modification date (might be overridden later by
-#             # metadata-data):
-#
-# #             self.setCell(row, colDate, datetime.fromtimestamp(
-# #                 p.date()).strftime('%Y:%m:%d %H:%M:%S'))
-# #             itemdate = QtWidgets.QTableWidgetItem()
-# #             datestr = datetime.fromtimestamp(
-# #                 p.date()).strftime('%Y:%m:%d %H:%M:%S')
-# #             itemdate.setText(datestr)
-# #             self.setItem(row, MATRIX_HEADER.index('Date'), itemdate)
-#
-#             # for coloured row indices:
-#             rowitem = QtWidgets.QTableWidgetItem()
-#             # previous row item number:
-#             if row == 0:
-#                 prev = 0
-#             else:
-#                 item = self.verticalHeaderItem(row - 1)
-#                 if item:
-#                     prev = int(item.text())
-#                 else:
-#                     prev = row - 1
-#
-#             rowitem.setText(str(prev + 1))
-#
-#             self.setVerticalHeaderItem(row, rowitem)
-#
-#             self._new_rows.append(row)
-#
-#         # correct row count:
-#         self.setRowCount(len(self.paths))
-
     def addMetaData(self):
-        self._thread = _ProcessThread(self._new_rows, self._new_paths)
-        self._thread.rowDone.connect(self._fillRow)
-        self._thread.finished.connect(self._fillFinished)
+        self.threadAddMetadata = _ProcessThread(self._new_rows, self._new_paths)
+        self.threadAddMetadata.rowDone.connect(self._fillRow)
+        self.threadAddMetadata.finished.connect(self._fillFinished)
 
         self._b = self.gui.addTemporaryProcessBar()
         self._b.setColor('darkgreen')
-        self._b.setCancel(self._thread.kill)
+        self._b.setCancel(self.threadAddMetadata.kill)
         self._b.show()
 
-        self._thread.start()
+        self.threadAddMetadata.start()
 
     def _fillRow(self, progress, row, meta):
         b = self._b
@@ -617,12 +650,12 @@ class ImageTable(_TableBase):
         b.bar.setFormat(
             "Reading image meta data %s" % int(progress) + '%')
         for i, t in enumerate(meta):
-            item = self.setCell(row, 5 + i, t)
-            item.metaText = t
+            self.setCell(row, 4 + i, t)
+#             item.metaText = t
 
     def _fillFinished(self):
         self.gui.removeTemporaryProcessBar(self._b)
-        self.filled.emit(self.isVisible())
+        self.filled.emit()
 
 
 class DragWidget(QtWidgets.QGroupBox):
@@ -653,7 +686,7 @@ class DragWidget(QtWidgets.QGroupBox):
 #         lleft.addWidget(QtWidgets.QLabel("Path contains:    "))
         lleft.addWidget(QtWidgets.QLabel("Example path:"))
 
-        btn = QtWidgets.QPushButton("Blocks:")
+        self.btn = QtWidgets.QPushButton("Blocks:")
         menu = QtWidgets.QMenu()
         menu.setToolTipsVisible(True)
 
@@ -665,39 +698,9 @@ class DragWidget(QtWidgets.QGroupBox):
             a = menu.addAction(k)
             a.triggered.connect(lambda _checked, k=k:
                                 self._addLabel(_RemovableLabel(self._lGrid, k)))
-        btn.setMenu(menu)
+        self.btn.setMenu(menu)
 
-        lleft.addWidget(btn)  # QtWidgets.QLabel("Blocks:"))
-#         lleft.addStretch(1)
-#         #<<<<<FILL HEADER WITH FIELD OPTIONS
-#         ltop = QtWidgets.QHBoxLayout()
-#         lright.addLayout(ltop)
-#
-#         self.fieldOptions, self.fieldNames = [], []
-#         for opts in CATEGORIES:
-#             fieldName = QtWidgets.QCheckBox()
-#             fieldOptions = QtWidgets.QComboBox(self)
-#
-#             fieldName.setChecked(opts[0])
-#             fieldOptions.setEnabled(opts[0])
-#             fieldOptions.addItems(opts[1:])
-#
-#             ltop.addWidget(fieldName)
-#             ltop.addWidget(fieldOptions)
-#
-#             fieldName.clicked.connect(fieldOptions.setEnabled)
-#             fieldOptions.currentIndexChanged.connect(self.changed.emit)
-#             fieldName.clicked.connect(self.changed.emit)
-#
-#             self.fieldOptions.append(fieldOptions)
-#             self.fieldNames.append(fieldName)
-# #         btnDummy = QtWidgets.QPushButton("Extract values by text")
-# #         btnDummy.setToolTip(parsePath.__doc__)
-# #         btnDummy.clicked.connect(self._addParsePathLabel)
-# #         ltop.addWidget(btnDummy)
-#
-#         ltop.addStretch(1)
-#         #>>>>>>
+        lleft.addWidget(self.btn) 
 
         ll = self._lGrid = QtWidgets.QGridLayout()
         lright.addLayout(self._lGrid)
@@ -715,21 +718,24 @@ class DragWidget(QtWidgets.QGroupBox):
 
             ll.addWidget(lab, 0, (2 * i) + 1)
 
-#         for i, (co, ch) in enumerate(zip(self.fieldOptions, self.fieldNames)):
-#             lab = _RemovableLabel(self._lGrid, co.currentText())
-# #             lab.setText(co.currentText())
-#             co.currentIndexChanged.connect(
-#                 lambda _index, co=co, lab=lab: lab.setText(co.currentText()))
-#             ch.clicked.connect(lambda checked, lab=lab:
-#                                self._addRemoveLabel(checked, lab))
-#
-# #             lab.setFrameStyle(QtWidgets.QFrame.Sunken |
-# #                               QtWidgets.QFrame.StyledPanel)
-#             p = (2 * i) + 1
-#             ll.addWidget(lab, 1, p)
-#
-#             if not ch.isChecked():
-#                 self._addRemoveLabel(False, lab)
+    def saveState(self):
+        out = []
+        for i in range(self.N_LAST_FOLDERS):
+            item = self._lGrid.itemAtPosition(1, (2 * i) + 1)
+            if item:
+                out.append(item.widget().text())
+            else:
+                out.append(None)
+        return out
+
+    def restoreState(self, state):
+        for i, s in enumerate(state):
+            if s is not None:
+                if s in CAT_FUNCTIONS.keys():
+                    label = _RemovableLabel(self._lGrid, s)
+                else:
+                    label = _LabelParsePath(self._lGrid, s)
+                self._lGrid.addWidget(label, 1, 2 * i + 1)
 
     def _addParsePathLabel(self):
         lab = _LabelParsePath(self._lGrid, "#N_#n_")
@@ -746,10 +752,6 @@ class DragWidget(QtWidgets.QGroupBox):
 
     def _addLabel(self, label):
         ll = self._lGrid
-#         if not checked:
-#             ll.removeWidget(label)
-#             label.hide()
-#         else:
         # find empty space:
         for i in range(ll.columnCount() // 2):
             if not ll.itemAtPosition(1, 2 * i + 1):
@@ -820,7 +822,6 @@ class DragWidget(QtWidgets.QGroupBox):
         depending on adjusted label positions,
         split given path into MATRIX row
         '''
-        path = PathStr(path)
         names = path.splitNames()[-self.N_LAST_FOLDERS:]
         names[-1] = PathStr(names[-1]).rmFileType()
 
@@ -835,25 +836,21 @@ class DragWidget(QtWidgets.QGroupBox):
                     fn(out, n)
                 except KeyError:
                     toRow(out, parsePath(n, txt))
-#                     print(e)
-#                     success = False
-
-        colDate = MATRIX_HEADER.index('Date') - 1
-        if not out[colDate]:
-            out[colDate] = datetime.fromtimestamp(
-                path.date()).strftime('%Y:%m:%d %H:%M:%S')
+                except IndexError:
+                    pass
 
         return success, out
 
 
 class _RemovableLabel(QtWidgets.QLabel):
+
     def __init__(self, layout, txt):
         super(). __init__(txt)
         self._lay = layout
         self.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.showMenu)
 
-        self.setFrameStyle(QtWidgets.QFrame.Sunken |
+        self.setFrameStyle(QtWidgets.QFrame.Sunken | 
                            QtWidgets.QFrame.StyledPanel)
 
     def remove(self):
@@ -925,18 +922,10 @@ class _ProcessThread(QtCore.QThread):
     '''
     rowDone = QtCore.pyqtSignal(object, object, object)
 
-    def __init__(self, rows, paths):  # , runfn, donefn=None):
+    def __init__(self, rows, paths):
         QtCore.QThread.__init__(self)
         self.rows = rows
         self.paths = paths
-#         self.progressBar = tool.display.workspace.gui.progressBar
-#         self.runfn = runfn
-#         self._exc_info = None
-#
-#         self.sigDone.connect(self.done)
-#         if donefn is not None:
-#             self.sigDone.connect(donefn)
-#
 
     def kill(self):
         self.terminate()
@@ -948,33 +937,21 @@ class _ProcessThread(QtCore.QThread):
             out = metaData(path)
 
             progress = (i + 1) / len(self.paths) * 100  # %
-            self.rowDone.emit(progress, row, out  # , QtGui.QIcon(path)
-                              )
-#             self.rowDone.emit(progress, row, out)
+            self.rowDone.emit(progress, row, out)
 
 
-#
-#         self.progressBar.show()
-#         self.progressBar.cancel.clicked.connect(self.kill)
-#         self.progressBar.bar.setValue(50)
-#         self.sigUpdate.connect(self.progressBar.bar.setValue)
-#         self.progressBar.label.setText(
-#             "Processing %s" %
-#             self.tool.__class__.__name__)
-#         QtCore.QThread.start(self)
-#
-#     def done(self):
-#         self.progressBar.hide()
-#         self.progressBar.cancel.clicked.disconnect(self.kill)
-#
-#     def run(self):
-#         try:
-#             out = self.runfn()
-#         except (cv2.error, Exception, AssertionError) as e:
-#             if type(e) is cv2.error:
-#                 print(e)
-#             self.progressBar.cancel.click()
-#             self._exc_info = sys.exc_info()
-#             return
-#
-#         self.sigDone.emit(out)
+if __name__ == '__main__':
+    import sys
+    #######################
+    # temporary fix: app crack doesnt through exception
+    # https://stackoverflow.com/questions/38020020/pyqt5-app-exits-on-error-where-pyqt4-app-would-not
+    sys.excepthook = lambda t, v, b: sys.__excepthook__(t, v, b)
+    #######################
+    app = QtWidgets.QApplication([])
+    w = _TableBaseCopyPaste(10, 10)
+
+#     w.restore(w.config())
+
+    w.show()
+    app.exec_()
+    

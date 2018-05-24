@@ -1,17 +1,30 @@
+import os
 import base64
-from PyQt5 import QtWidgets, QtGui, QtCore
 import json
+
+from PyQt5 import QtWidgets, QtGui, QtCore
+
 from fancytools.os.PathStr import PathStr
 # LOCAL
 from client.widgets.ButtonGroupBox import ButtonGroupBox
 from client.dialogs import FilenameInputDialog
-from client.html import imageToHTML
-from client.html import toHtml
+from client._html import imageToHTML
+from client._html import toHtml
+from client.widgets.Projects import PNameValidator
+from client.widgets._Base import QMenu
+from client.widgets.base.Table import Table
 
 IMG_HELP = PathStr(__file__).dirname().dirname().join('media', 'help')
 
 
 class TabConfig(QtWidgets.QScrollArea):
+    '''
+    This tab includes all preferences of the images you are about to upload.
+    You can choose how images should be corrected, what information should be
+    collected and whether you want to receive a PDF report.
+    Rest the mouse on a parameter or click on Menu->Help to receive further information.
+    '''
+
     def __init__(self, gui):
         super(). __init__()
         self.gui = gui
@@ -23,38 +36,35 @@ class TabConfig(QtWidgets.QScrollArea):
 
         self.setWidget(self.inner)
 
-        a = self.analysis = _Analysis(gui)
+        self.preferences = a = _Preferences(gui)
         self.location = _Location(self)
         self.modules = _ModTable(self, gui)
 
-        self._addW(self.analysis, 'General', self.analysis)
-        self._modulesGroup = self._addW(self.modules, 'Modules',
-                                        horiz_stretch=True,
-                                        vert_stretch=True)
-
-        self._addW(self.location, 'Location', self.location)
+        self._addWidget(self.preferences, 'General', self.preferences)
+        self._modulesGroup = self._addWidget(self.modules, 'Modules',
+                                                horiz_stretch=True,
+                                                vert_stretch=True)
+        self._addWidget(self.location, 'Location', self.location)
 
         a.cbEnergyLoss.toggled.connect(self.cbEnergyLoss_clicked)
         a.cbEnergyLoss.toggled.connect(self._checkSetModulesTableEnabled)
         a.cbPerf.toggled.connect(self._checkSetModulesTableEnabled)
         a.cbQual.toggled.connect(self._checkSetModulesTableEnabled)
-
         a.cbQual.toggled.connect(lambda checked:
                                  self.modules.setColumnHidden(1, not checked))
         a.cbPerf.toggled.connect(lambda checked:
-                                 self.modules.setColumnHidden(2, not checked))
-        [self.modules.setColumnHidden(i, True) for i in range(1, 6)]
+                                 [self.modules.setColumnHidden(i, not checked) for i in (2, 3)])
+        [self.modules.setColumnHidden(i, True) for i in range(2, 6)]
 
         self.cbEnergyLoss_clicked(a.cbEnergyLoss.isEnabled())
         self._checkSetModulesTableEnabled()
 
     def checkValid(self):
-        '''returns whether configuration is complete
-        '''
+        '''returns whether configuration is complete'''
         return self.modules.checkValid()
 
     def _checkSetModulesTableEnabled(self):
-        a = self.analysis
+        a = self.preferences
         v = (a.cbEnergyLoss.isChecked() or
              a.cbPerf.isChecked() or
              a.cbQual.isChecked())
@@ -64,57 +74,37 @@ class TabConfig(QtWidgets.QScrollArea):
     def cbEnergyLoss_clicked(self, enabled):
         self.location.setVisible(enabled)
         t = self.modules
-        [t.setColumnHidden(
-            i, not enabled) for i in range(3, 6)]
-#         t.resizeColumnsToContents()
+        [t.setColumnHidden(i, not enabled) for i in range(3, 7)]
         t.update()
 
-    def _addW(self, w, name, g=None, horiz_stretch=False, vert_stretch=False):
-        if g is None:
-            g = QtWidgets.QGroupBox(name)
+    def _addWidget(self, w, name, group=None,
+                   horiz_stretch=False, vert_stretch=False):
+        if group is None:
+            group = QtWidgets.QGroupBox(name)
         ll = QtWidgets.QVBoxLayout()
         ll.setContentsMargins(1, 1, 1, 1)
 
-        g.setLayout(ll)
+        group.setLayout(ll)
         ll.addWidget(w)
         if not vert_stretch:
             ll.addStretch()
-        self.inner.layout().addWidget(g, stretch=1 if horiz_stretch else 0)
-        return g
+        self.inner.layout().addWidget(group, stretch=1 if horiz_stretch else 0)
+        return group
+
+    def saveState(self):
+        config = self.preferences.saveState()
+        config['modules'] = self.modules.saveState()
+        config['locations'] = self.location.saveState()
+        return config
 
     def toStr(self):
-        config = {}
-        config['modules'] = self.modules.config()
-        config['analysis'] = self.analysis.config()
-        config['location'] = self.location.config()
-        return json.dumps(config, indent=4)
+        return json.dumps(self.saveState(), indent=4) 
 
-    # TODO: better names??
-#     def saveToFile(self, path):
-#         config = {}
-#         # self.gui.camera.config()  # TODO: put in own tab
-# #         config['camera'] = {'name': self.camOpts.currentText()}
-#         config['modules'] = self.modules.config()
-#         config['analysis'] = self.analysis.config()
-#         config['location'] = self.location.config()
-#
-#         with open(path, 'w') as f:
-#             f.write(json.dumps(config, indent=4))
-
-    # TODO: better names??
-    def restore(self, config):
+    def restoreState(self, config):
         if len(config):
-            #             self.gui.camera.restore(config['camera'])
-            #             self.analysis.camOpts.addItem(config['camera']['name'])
-            #             self.analysis.camOpts.setCurrentIndex(
-            #                 self.analysis.camOpts.count() - 1)
-            try:
-                self.modules.restore(config['modules'])
-                self.analysis.restore(config['analyze'])
-                self.location.restore(config['location'])
-
-            except KeyError:  # TODO: remove
-                pass
+            self.preferences.restoreState(config)
+            self.modules.restoreState(config['modules'])
+            self.location.restoreState(config['locations'])
 
 
 class _StartThread(QtCore.QThread):
@@ -132,7 +122,7 @@ class _StartThread(QtCore.QThread):
 class _LocGroupBox(ButtonGroupBox):
 
     def __init__(self, name, parent=None, **kwargs):
-        super().__init__(parent=parent, **kwargs)
+        super().__init__(parent=parent, topleft=False, **kwargs)
         self.parent = parent
         self.btn.clicked.connect(lambda: parent.closeGroup(self))
 
@@ -144,31 +134,25 @@ class _LocGroupBox(ButtonGroupBox):
                 gr[0].btn.setEnabled(len(gr) > 1)
             else:
                 self.btn.setEnabled(False)
+
         self.btn.clicked.connect(fn)
         fn()
 
         self.btn.setIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_TitleBarCloseButton))
 
-#         self.layout().addWidget(self.groupBox)
         ltop = QtWidgets.QVBoxLayout()
         self.setLayout(ltop)
-#         ltop = self.layout()
-
-#         ll = QtWidgets.QGridLayout()
-
         lll = QtWidgets.QGridLayout()
-
         ltop.addLayout(lll)
-#         self.setLayout(lll)
 
         self.edName = QtWidgets.QLineEdit()
         self._oldLocName = name
         self.edName.setPlaceholderText(name)
         self.edName.textChanged.connect(self._edNameChanged)
-        self._edAdress = QtWidgets.QLineEdit()
-        self._edAdress.setPlaceholderText("7 Engineering Drive 1, Singapore")
-        self._edAdress.returnPressed.connect(self._locationChanged)
+        self.edAddress = QtWidgets.QLineEdit()
+        self.edAddress.setPlaceholderText("7 Engineering Drive 1, Singapore")
+        self.edAddress.returnPressed.connect(self._locationChanged)
         btn = QtWidgets.QPushButton("Lookup address")
         btn.clicked.connect(self._locationChanged)
 
@@ -189,7 +173,7 @@ class _LocGroupBox(ButtonGroupBox):
         lll.addWidget(self.edName, 0, 0)
 
         l2 = QtWidgets.QHBoxLayout()
-        l2.addWidget(self._edAdress)
+        l2.addWidget(self.edAddress)
         l2.addWidget(btn)
         lll.addLayout(l2, 0, 1)
 
@@ -210,21 +194,22 @@ class _LocGroupBox(ButtonGroupBox):
         self._oldLocName = newname
 
     def _locationChanged(self):
-        loc = self._edAdress.text()
+        loc = self.edAddress.text()
         if loc and self.parent._th.geolocator:
             location = self.parent._th.geolocator.geocode(loc)
             if location:
-                self._labFoundAddress.setText(  # "Found: " +
+                self._labFoundAddress.setText(
                     location.address.replace(', ', '\n'))
                 self.edLong.setText(str(location.longitude))
                 self.edLat.setText(str(location.latitude))
             else:
-                self._labFoundAddress.setText('')  # "Found: ")
+                self._labFoundAddress.setText('')  
                 self.edLong.setText('nothing')
                 self.edLat.setText('nothing')
 
 
 class _Location(ButtonGroupBox):
+
     def __init__(self, tabconfig):
         super().__init__("  Location")
         self.tabconfig = tabconfig
@@ -254,35 +239,47 @@ class _Location(ButtonGroupBox):
     def add(self):
         lg = len(self.groups)
         name = 'Loc%i' % (lg + 1)
-        g = _LocGroupBox(name, parent=self)
-        self.groups.append(g)
-        self.layout().insertWidget(lg, g)
+        self._add(name)
         return name
 
-    def config(self):
-        return {}  # 'name': self.camOpts.currentText()}
+    def _add(self, name):
+        g = _LocGroupBox(name, parent=self)
+        self.layout().insertWidget(len(self.groups), g)
+        self.groups.append(g)
+        return g
 
-    def restore(self, c):
-        pass
+    def saveState(self):
+        dd = {}
+        for g in self.groups:
+            loc = g.edName.text()
+            if not loc:
+                loc = g.edName.placeholderText()
+            dd[loc] = (g.edAddress.text(), g.edLong.text(), g.edLat.text())
+        return dd
+
+    def restoreState(self, c):
+        for g in self.groups:
+            self.closeGroup(g)
+        for name, (addr, long, lat) in c.items():
+            g = self._add(name)
+            g.edAddress.setText(addr)
+            g.edLong.setText(str(long))
+            g.edLat.setText(str(lat))
 
 
 class _Delegate_ID(QtWidgets.QItemDelegate):
-    def __init__(self, table, gui, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.gui = gui
-        self.table = table
 
-    def createEditor(self, parent, *_args, **_kwargs):
+    def __init__(self, fn, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fn = fn
+
+    def createEditor(self, parent, _styleitem, index):
         comboType = QtWidgets.QComboBox(parent)
-        mod = self.gui.modules()
-        for row in range(self.table.rowCount()):
-            i = self.table.item(row, 0)
-            if i is not None:
-                try:
-                    mod.remove(i.text())
-                except ValueError:
-                    pass
-        comboType.addItems(mod)
+        currentText = index.data()
+        mods = self.fn()
+        if currentText is not None:
+            mods.insert(0, currentText)
+        comboType.addItems(mods)
         return comboType
 
 
@@ -306,7 +303,6 @@ class _Delegate_isc(QtWidgets.QItemDelegate):
 
     def createEditor(self, parent, *_args, **_kwargs):
         editor = QtWidgets.QDoubleSpinBox(parent)
-
         editor.setRange(0.1, 12)
         return editor
 
@@ -314,14 +310,21 @@ class _Delegate_isc(QtWidgets.QItemDelegate):
 class _Delegate_tcoeff(QtWidgets.QItemDelegate):
 
     def createEditor(self, parent, *_args, **_kwargs):
-        spNOCT = QtWidgets.QDoubleSpinBox(parent)
-        spNOCT.setRange(0, 100)
-#         spNOCT.setValue(-1.5)
-#         spNOCT.setSuffix(' %/°C')
-        return spNOCT
+        editor = QtWidgets.QDoubleSpinBox(parent)
+        editor.setRange(0, 100)
+        return editor
+
+
+class _Delegate_ploss(QtWidgets.QItemDelegate):
+
+    def createEditor(self, parent, *_args, **_kwargs):
+        editor = QtWidgets.QDoubleSpinBox(parent)
+        editor.setRange(0, 15)
+        return editor
 
 
 class _Delegate_loc(QtWidgets.QItemDelegate):
+
     def __init__(self, config, *args, **kwargs):
         self.tabconfig = config
         super().__init__(*args, **kwargs)
@@ -338,21 +341,19 @@ class _Delegate_loc(QtWidgets.QItemDelegate):
         return comboType
 
 
-class _ModTable(QtWidgets.QTableWidget):
+class _ModTable(Table):
+
     def __init__(self, config, gui):
-        super().__init__(2, 6)
+        super().__init__(2, 7)
         self.tabconfig = config
         self.gui = gui
 
         [self.setColumnWidth(n, width)
-         for n, width in enumerate([40, 50, 70, 70, 50])]
+         for n, width in enumerate([40, 50, 70, 70, 70, 50])]
 
-        LABELS = ['ID\n', 'Width*\n[m]', "I_sc\n[A]",
+        LABELS = ['ID\n', 'Width*\n[m]', "I_sc\n[A]", 'Power decline\n[%/a]',
                   'Typ\n', 'T_coeff\n[-%/°C]', 'Location\n']
         self.setHorizontalHeaderLabels(LABELS)
-#         item = QtWidgets.QTableWidgetItem()
-#         item.setText("I<sub>mpp</sub>\n[A]")
-#         self.setHorizontalHeaderItem(2, item)
 
         # draw top header frame :
         header = self.horizontalHeader()
@@ -366,8 +367,8 @@ class _ModTable(QtWidgets.QTableWidget):
 
         # save delegates, otherwise garbage collections causes crash
         # when multiple delegated are set via setItemDelegateForColumn
-        self._delegates = (_Delegate_ID(self, self.gui), _Delegate_width(),
-                           _Delegate_isc(), _Delegate_typ(),
+        self._delegates = (_Delegate_ID(self.remainingModules), _Delegate_width(),
+                           _Delegate_isc(), _Delegate_ploss(), _Delegate_typ(),
                            _Delegate_tcoeff(), _Delegate_loc(self.tabconfig))
         [self.setItemDelegateForColumn(
             col, self._delegates[col]) for col in range(len(self._delegates))]
@@ -375,43 +376,57 @@ class _ModTable(QtWidgets.QTableWidget):
         self.verticalHeader().setVisible(False)
         h = self.horizontalHeader()
         h.setSectionResizeMode(h.Stretch)
-#         h.setStretchLastSection(True)
 
         self.currentCellChanged.connect(self._addOrRemoveRows)
 
+    def removeSelectedRows(self):
+        super().removeSelectedRows()
+        if not self.rowCount():
+            self.setRowCount(1)
+
+    def remainingModules(self):
+        mod = self.gui.tabUpload.table.modules()
+        for row in range(self.rowCount()):
+            i = self.item(row, 0)
+            if i is not None:
+                try:
+                    mod.remove(i.text())
+                except KeyError:
+                    pass
+        return mod
+
     def checkValid(self):
-        # check whether mod table is visible ... which means it should be
-        # filled:
-        #         isvisible = False
-        #         for c in range(self.columnCount()):
-        #             print(c, self.isColumnHidden(c))
-        #             if not self.isColumnHidden(c):
-        #                 isvisible = True
-        #                 break
         if not self._isVisible:
             return True
         # check whether all mod ids are entered:
-        nid = 0
+#         nid = 0
         orow, xrow = [], []  # filled and empty cells (ID)
         for row in range(self.rowCount()):
             item = self.item(row, 0)
             if item and item.text():
-                nid += 1
+#                 nid += 1
                 orow.append(row)
             else:
                 xrow.append(row)
-        if nid != len(self.gui.modules()):
+#         print(nid, len(self.gui.modules()), xrow)
+        rmods = self.remainingModules()
+        if len(rmods):
+#         if nid != len(self.gui.modules()):
             self.gui.tabs.setCurrentWidget(self.tabconfig)
             items = []
             for row in xrow:
-                item = self.item2(row, 0)
+                item = self.setCell(row, 0)
                 item.setBackground(QtGui.QBrush(QtCore.Qt.red))
                 items.append(item)
-            QtWidgets.QMessageBox.critical(self, "ID column incomplete",
-                                           "Please fill in all module IDs")
+            if len(rmods) > 1:
+                txt = "Please add modules:\n\t%s" % str(rmods)[1:-1]
+            else:
+                txt = "Please add module:\n\t%s" % rmods
+            QtWidgets.QMessageBox.critical(self, "ID column incomplete", txt)
             bg = QtWidgets.QTableWidgetItem().background()
             for item in items:
                 item.setBackground(bg)
+            return  False
 
         # check whether all other visible cells where a module id is defined as
         # filled
@@ -419,7 +434,7 @@ class _ModTable(QtWidgets.QTableWidget):
         for row in orow:
             for c in range(1, self.columnCount()):
                 if not self.isColumnHidden(c):
-                    item = self.item2(row, c)
+                    item = self.setCell(row, c)
                     if not item.text():
                         items.append(item)
                         item.setBackground(QtGui.QBrush(QtCore.Qt.red))
@@ -434,22 +449,44 @@ class _ModTable(QtWidgets.QTableWidget):
 
         return True
 
-    def item2(self, row, col):
-        # TODO:move to baseclass
-        item = self.item(row, col)
-        if not item:
-            item = QtWidgets.QTableWidgetItem()
-            self.setItem(row, col, item)
-        return item
+    def _addAllMissingModules(self):
+        mod = self.remainingModules()
+        self.setRowCount(self.rowCount() + len(mod))
+        row = -1
+        for m in mod:
+            while True:
+                row += 1
+                i = self.item(row, 0)
+                if i is None or i.text() == '':
+                    break
+            self.setCell(row, 0, m)
+                    
+    def mousePressEvent(self, event):
+        mouseBtn = event.button()
+        if mouseBtn == QtCore.Qt.RightButton:
+#             self._menu = QMenu() 
+            
+            col = self.columnAt(event.pos().x())
+            self._menu = self.createContextMenu()
+            if col == 0:
+                self._menu.addAction("Add missing modules").triggered.connect(
+                    self._addAllMissingModules)
+            else:
+                row = self.rowAt(event.pos().y())
+                self._rclickedCell = self.item(row, col)
+                
+                self._menu.addAction("Apply for all").triggered.connect(
+                    self._applyForAll)
 
-    def keyPressEvent(self, evt):
-        if evt.matches(QtGui.QKeySequence.Delete):
-            for ran in self.selectedRanges():
-                for row in range(ran.bottomRow(), ran.topRow() - 1, -1):
-                    if row > 1:
-                        self.removeRow(row)
-        else:
-            super().keyPressEvent(evt)
+            self._menu.popup(event.globalPos())
+        super().mousePressEvent(event)
+
+    def _applyForAll(self):
+        if self._rclickedCell:
+            txt = self._rclickedCell.text()
+            col = self.currentColumn()
+            for row in range(self.rowCount()):
+                self.setCell(row, col, txt)
 
     def _addOrRemoveRows(self, row):
         if row == self.rowCount() - 1:
@@ -464,46 +501,42 @@ class _ModTable(QtWidgets.QTableWidget):
                 if empty:
                     self.setRowCount(r)
 
-    def config(self):
-        return {}  # 'name': self.camOpts.currentText()}
+    def saveState(self):
+        state = {}
+        for row in self.toTable():
+            state[row[0]] = row[1:]
+        return state
 
-    def restore(self, c):
-        pass
-
-
-# class _Modules(QtWidgets.QWidget):
-#     def __init__(self, config):
-#         super().__init__()
-#
-# #         self.gui = gui
-#
-#         # update table, every time, when TabCheck has ned IDS
-#         # and when images were imgported
-#         # addnew devices to end
-#
-#         ll = QtWidgets.QVBoxLayout()
-#         self.setLayout(ll)
-#
-# #         btn = QtWidgets.QPushButton('Update')
-# #         ll.addWidget(btn, alignment=QtCore.Qt.AlignLeft)
-#
-#         self.table = _ModTable()
-#         ll.addWidget(self.table)
-#
+    def restoreState(self, tabledict):
+        table = []
+        for mod in sorted(tabledict.keys()):
+            row = [mod]
+            row.extend(tabledict[mod])
+            table.append(row)
+        self.pasteTable(table)
 
 
-class _Analysis(QtWidgets.QWidget):
+class _GroupBox(QtWidgets.QGroupBox):
+
+    # make title bold
+    def __init__(self, title):
+        super().__init__(title)
+        self.setStyleSheet('''QGroupBox {font-weight: bold;}''')
+
+
+class _Preferences(QtWidgets.QWidget):
+
     def __init__(self, gui):
         super().__init__()
         self.gui = gui
         ll = QtWidgets.QVBoxLayout()
         self.setLayout(ll)
 
-        g0 = QtWidgets.QGroupBox('General options')
-        g1 = QtWidgets.QGroupBox('Camera')
-        g = QtWidgets.QGroupBox('Correct images (free)')
-        self.btnPP = g2 = QtWidgets.QGroupBox(
-            'Post processing (1S$ per measurement)')
+        g0 = _GroupBox('General')
+        g1 = _GroupBox('Camera calibration')
+        self.gCor = g = _GroupBox('Image correction (free)')
+        self.gPP = g2 = _GroupBox(
+            'PRO features%s' % (' (%s)' % gui.server.pricePROfeatures() if gui else ''))
 
         ll.addWidget(g0)
         ll.addWidget(g1)
@@ -511,10 +544,14 @@ class _Analysis(QtWidgets.QWidget):
         ll.addWidget(g2)
         ll.addStretch()
 
-        #<<<<GENERAL SECTION
-        lab = QtWidgets.QLabel(" image viewer")
+        g.setCheckable(True)
+        g.setChecked(True)
+#         g.toggled.connect(self._correctToggled)
+
+        # <<<<GENERAL SECTION
+        lab = QtWidgets.QLabel(" File viewer")
         self.cbViewer = cb = QtWidgets.QComboBox()
-        cb.addItems(("OS default", "Inline", 'dataArtist'))
+        cb.addItems(("Inline", "OS default", 'dataArtist'))
         l0 = QtWidgets.QVBoxLayout()
         l01 = QtWidgets.QHBoxLayout()
         l01.addWidget(cb)
@@ -545,20 +582,41 @@ until this option is switched off.""" % self._filePwd)
         l0.addWidget(self._cb2fa)
         l0.addWidget(autologin)
 
-        #<<<CAMERA SECTION:
+        # <<<CAMERA SECTION:
         l1 = QtWidgets.QVBoxLayout()
         l11 = QtWidgets.QHBoxLayout()
         l1.addLayout(l11)
 
         g1.setLayout(l1)
 
-        self.camOpts = QtWidgets.QComboBox()
+        # CAMERA NAME
+        cb = self.camOpts = QtWidgets.QComboBox()
         if gui:
-            self.camOpts.addItems(gui.server.availCameras())
+            cb.addItems(gui.server.cameraList())
+        cb.setEditable(True)
+        cb.setMinimumWidth(135)
+        cb.lineEdit().setValidator(PNameValidator())
+        cb.currentIndexChanged.connect(self._renameCameraStarted)
+        cb.setInsertPolicy(QtWidgets.QComboBox.InsertAtCurrent)
 
+        self._lastCamName = cb.currentText()
+        cb.lineEdit().editingFinished.connect(self._renameCamera)
+
+        btnDel = QtWidgets.QToolButton()
+        btnDel.setText('-')
+        btnDel.setAutoRaise(True)
+        btnDel.clicked.connect(self._removeCurrentCamera)
+            
         btnAdd = QtWidgets.QToolButton()
         btnAdd.setText('+')
         btnAdd.setAutoRaise(True)
+        btnAdd.clicked.connect(self._newCamera)
+
+        self.cbCamUpdate = QtWidgets.QCheckBox("Update")
+        txt = """Check this box, to update 
+camera calibration using images from current upload agenda."""
+        self.cbCamUpdate.setToolTip(txt)
+        self.cbCamUpdate.setChecked(True)
 
         ckCal = QtWidgets.QCheckBox('Use own camera calibration')
         ckCal.setToolTip(''''By default a camera calibration is generated by the images 
@@ -568,7 +626,14 @@ if an camera calibration is conducted. Check this box to use your own calibratio
         ckCal.clicked.connect(lambda _: [QtWidgets.QMessageBox.warning(
             self, 'Not implemented', 'At the moment it is not possible to use an own camera calibration. Sorry.'
         ), ckCal.setChecked(False), ckCal.setEnabled(False)])
-        btnAdd.clicked.connect(self._newCamera)
+
+        self._btnCamReport = QtWidgets.QPushButton('View report') 
+        self._btnCamReport.setToolTip('Click  to view latest camera calibration report')
+        self._btnCamReport.setFlat(True) 
+        self._btnCamReport.clicked.connect(self._displayCurrentCameraReport)        
+#         if gui:
+#             self.camOpts.currentTextChanged.connect(self._checkCamReportAvail)
+#             self._checkCamReportAvail()
 
         self.ckLight = QtWidgets.QCheckBox("Variable light conditions")
         txt = """Check this box, if measurements are NOT done in a light-tight chamber
@@ -588,18 +653,21 @@ image for every measurement is essential.""" % (
         self.ckLight.setToolTip(toHtml(txt))
 
         l11.addWidget(self.camOpts)
+        l11.addWidget(btnDel)
         l11.addWidget(btnAdd)
+        l11.addWidget(self._btnCamReport)
         l11.addStretch()
+        l1.addWidget(self.cbCamUpdate)
         l1.addWidget(ckCal)
         l1.addWidget(self.ckLight)
 
-        #<<<<CORRECT IMAGES SECTION
+        # <<<<CORRECT IMAGES SECTION
         lll = QtWidgets.QVBoxLayout()
         g.setLayout(lll)
 
-        g2.setCheckable(True)
-        g2.setChecked(False)
-        g2.toggled.connect(self._postProcessingToggled)
+#         g2.setCheckable(True)
+#         g2.setChecked(False)
+#         g2.toggled.connect(self._postProcessingToggled)
 
         lll2 = QtWidgets.QVBoxLayout()
         g2.setLayout(lll2)
@@ -609,16 +677,18 @@ image for every measurement is essential.""" % (
             '''If this parameter is not checked, 
 image size of the corrected image will be determined according to input image''')
         self.sizeX = QtWidgets.QSpinBox()
-        self.sizeX.setPrefix('x ')
+        self.sizeX.setPrefix('x: ')
         self.sizeX.setRange(0, 20000)
         self.sizeX.setValue(4000)
-
+        self.sizeX.setSuffix(' px')
         self.sizeX.setEnabled(False)
 
         self.sizeY = QtWidgets.QSpinBox()
-        self.sizeY.setPrefix('y ')
+        self.sizeY.setPrefix('y: ')
         self.sizeY.setRange(0, 20000)
         self.sizeY.setValue(2400)
+        self.sizeY.setSuffix(' px')
+
         self.sizeY.setEnabled(False)
 
         self.cbSize.clicked.connect(self.sizeX.setEnabled)
@@ -629,6 +699,46 @@ image size of the corrected image will be determined according to input image'''
         lSize.addWidget(self.sizeX)
         lSize.addWidget(self.sizeY)
         lSize.addStretch(1)
+        
+        labCamcor = QtWidgets.QLabel("Correct camera distortion")
+        self.corCam = QtWidgets.QComboBox()
+        self.corCam.addItems(['strong', 'weak', 'off'])
+        self.corCam.setToolTip('''<b>strong</b> --> CALIBRATE and CORRECT for the following distortions:
+    - vignetting = f(f-number)
+    - dark current =  f(exposure time, ISO, f-number)
+    - lens distortion 
+    - noise = f(ISO)
+    - camera response function = f(ISO)
+    - single time effects (if 2 sequential images are available)
+    - image artifacts (high gradient defects)
+    - sensor sensitivity (spatial)
+
+    PRO: returns highest quality output
+    CON: time consuming
+    
+<hr>
+
+<b>weak</b> --> ESTIMATE and CORRECT for the following distortions:
+    - average dark current level
+    - vignetting from single image 
+
+    PRO: much faster than [strong]
+    CON: no camera calibration and no calibration report generated
+         returns lower quality images
+         
+<hr> 
+       
+<b>off</b> --> no correction for camera induced distortions
+
+    PRO: fastest method
+    CON: resulting images can be highly distorted
+'''.replace('\n', '<br>').replace(' ', '&nbsp;'))
+        labCamcor.setToolTip(self.corCam.toolTip())
+
+        lCam = QtWidgets.QHBoxLayout()
+        lCam.addWidget(labCamcor)
+        lCam.addWidget(self.corCam)
+        lCam.addStretch(1)
 
         self.cbDeformed = QtWidgets.QCheckBox("Devices might be deformed")
         self.cbDeformed.setToolTip('''Check this parameter, 
@@ -641,9 +751,27 @@ if mechanical deformation of the imaged device cannot be ruled out.''')
 if the device position differs for different currents in one measurement.''')
 
         # TODO: should be always done, or?
-        self.cbPrecise = QtWidgets.QCheckBox("Precise alignment")
-        self.cbPrecise.setToolTip('This option increases calculation time')
-        self.cbPrecise.setChecked(True)
+#         self.cbPrecise = QtWidgets.QCheckBox("Precise alignment")
+#         self.cbPrecise.setToolTip('This option increases calculation time')
+#         self.cbPrecise.setChecked(True)
+
+        self.comAlignment = QtWidgets.QComboBox()
+        self.comAlignment.addItems(['strong', 'medium', 'weak', 'off'])
+        self.comAlignment.setCurrentText('medium')
+        self.corCam.setToolTip('''Due to module deformation of remaining optical distortion,
+images of the same devices at different measurements might remain miss-aligned, even after perspective correction.
+Its reduction quality influences the overall calculation speed.
+        
+        <b>strong</b> --> Image alignment will be most precise,  but computation takes longest.
+        <b>median</b> --> Image alignment will be precise,  but computation takes some time.
+        <b>weak</b> --> Image alignment will be less precise,  but computation is faster.
+        <b>off</b> --> NO image alignment.
+        ''')
+
+        lAlign = QtWidgets.QHBoxLayout()
+        lAlign.addWidget(QtWidgets.QLabel('Alignment precision'))
+        lAlign.addWidget(self.comAlignment)
+        lAlign.addStretch(1)
 
         self.cbArtifacts = QtWidgets.QCheckBox("Remove artifacts")
         self.cbArtifacts.setToolTip('Filter erroneous pixels')
@@ -654,14 +782,19 @@ if the device position differs for different currents in one measurement.''')
         lcorr.addLayout(lcorrW)
         lcorrW.addLayout(lSize)
 
+        lcorrW.addLayout(lCam)
+
         lcorrW.addWidget(self.cbDeformed)
         lcorrW.addWidget(self.cbPos)
-        lcorrW.addWidget(self.cbPrecise)
+        lcorrW.addLayout(lAlign)
         lcorrW.addWidget(self.cbArtifacts)
 
-        #<<<<POSTPROCESSING SECTION
+        # <<<<POSTPROCESSING SECTION
+        self.cbPost = QtWidgets.QCheckBox("Post processing")
+
         self.cbQual = cb0 = QtWidgets.QCheckBox(
-            "Calculate image quality")
+            "Image quality")
+        cb0.toggled.connect(lambda checked: self.corCam.setCurrentIndex(0) if checked else None)
         cb0.setChecked(False)
 
         self.cbUncert = cb01 = QtWidgets.QCheckBox("Map uncertainty")
@@ -671,37 +804,53 @@ if the device position differs for different currents in one measurement.''')
         self.cbEnhance.setToolTip(
             'Create an additional sharpened and denoised image')
 
+        self.cbTimelapse = QtWidgets.QCheckBox("Create timelapse video")
+        self.cbTimelapse.setToolTip('TODO')
+
+        self.cbStats = QtWidgets.QCheckBox("Cell statistics")
+        self.cbStats.setToolTip(
+            'Calculate cell average and standard deviation')
+
+        self.cbFeatures = cb12 = QtWidgets.QCheckBox("Feature detection")
+        cb12.setToolTip(
+            'Detect and measure cracks and inactive areas')
+
         self.cbPerf = cb1 = QtWidgets.QCheckBox("Estimate Power loss")
         cb1.setToolTip(
             'Calculate the power loss relative to initial measurement')
 
         self.cbEnergyLoss = cb11 = QtWidgets.QCheckBox("+ Energy loss")
-        self._makeCBdependant(cb11, cb1)
-
-        cb12 = QtWidgets.QCheckBox("Detect features")
-        cb12.setToolTip(
-            'Detect and measure cracks and inactive areas')
+        self._makeCBdependant(cb1, cb11)
 
         self.cbReport = QtWidgets.QCheckBox(
-            "Write report")
+            "PDF report")
 
         self.cbMail = QtWidgets.QCheckBox("Send report via mail")
 
-        self._makeCBdependant(cb01, cb0)
-        self._makeCBdependant(self.cbEnhance, cb0)
+        self._makeCBdependant(cb0, cb01)
+        self._makeCBdependant(cb0, self.cbEnhance)
+
+        self._makeCBdependant(self.cbPost, self.cbStats)
+        self._makeCBdependant(self.cbPost, self.cbTimelapse)
+        self._makeCBdependant(self.cbPost, self.cbFeatures)
+        self._makeCBdependant(self.cbPost, self.cbPerf)
 
         lll.addLayout(lcorr)
         lll2.addWidget(cb0)
 
-        self._addIndented(cb01, lll2)
-        self._addIndented(self.cbEnhance, lll2)
+        self._addIndented(lll2, cb01)
+        self._addIndented(lll2, self.cbEnhance)
 
-        lll2.addWidget(cb1)
-        self._addIndented(cb11, lll2)
-        lll2.addWidget(cb12)
-
+        # add post proc
+        lll2.addWidget(self.cbPost)
+        self._addIndented(lll2, self.cbStats)
+        self._addIndented(lll2, self.cbTimelapse)
+        self._addIndented(lll2, cb12)
+        self._addIndented(lll2, cb1)
+        self._addIndented(lll2, cb11, 2)
+        
         self.cbManual = cb2 = QtWidgets.QCheckBox(
-            "Ask an engineer to evaluate the results")
+            "Ask us to evaluate the results")
 
         self.manualEditor = editor = QtWidgets.QTextEdit()
         editor.setPlaceholderText(
@@ -710,12 +859,33 @@ if the device position differs for different currents in one measurement.''')
         cb2.clicked.connect(editor.setVisible)
 
         lll2.addWidget(self.cbReport)
-        self._addIndented(self.cbMail, lll2)
-        self._addIndented(cb2, lll2)
-        self._addIndented(editor, lll2)
+        self._addIndented(lll2, self.cbMail)
+        self._addIndented(lll2, cb2)
+        self._addIndented(lll2, editor)
 
-        self._makeCBdependant(self.cbMail, self.cbReport)
-        self._makeCBdependant(self.cbManual, self.cbReport)
+        self._makeCBdependant(self.cbReport, self.cbMail)
+        self._makeCBdependant(self.cbReport, self.cbManual)
+
+#     def _checkCamReportAvail(self):
+#         cam = self.camOpts.currentText()
+#         self._btnCamReport.setEnabled(
+#             self.gui.server.cameraReportAvailable(cam))
+
+    def _removeCurrentCamera(self):
+        cam = self.camOpts.currentText()
+        ret = QtWidgets.QMessageBox.warning(self, 'Removing calibration for camera <%s>' % cam,
+            'Are you sure?')
+        if ret == QtWidgets.QMessageBox.Ok:
+            success = self.gui.server.cameraReportAvailable(cam)
+
+    def _displayCurrentCameraReport(self):
+        cam = self.camOpts.currentText()
+        if not self.gui.server.cameraReportAvailable(cam):
+            QtWidgets.QMessageBox.warning(self, 'Not available',
+            'No PDF report available for the chosen camera. Calibrate first!')
+        else:
+            local = self.gui.root.mkdir('cameras').join(cam + '.pdf')
+            self.gui.addDownload(cam, local, os.startfile, cmd='downloadCameraReport(%s)' % cam)
 
     def _changeAutologin(self, enable):
         if not enable:
@@ -743,15 +913,25 @@ if the device position differs for different currents in one measurement.''')
             self.camOpts.addItem(f.text())
             self.camOpts.setCurrentIndex(self.camOpts.count() - 1)
 
-    def _postProcessingToggled(self, checked):
-        if not checked:
-            if self.cbPerf.isChecked():
-                self.cbPerf.toggle()
-            if self.cbQual.isChecked():
-                self.cbQual.toggle()
+#     def _postProcessingToggled(self, checked):
+#         if not checked:
+#             if self.cbPerf.isChecked():
+#                 self.cbPerf.toggle()
+#             if self.cbQual.isChecked():
+#                 self.cbQual.toggle()
+                
+    def _renameCameraStarted(self):
+        self._lastCamName = self.camOpts.currentText()
+
+    def _renameCamera(self):
+        new = self.camOpts.currentText()
+        new2 = self.gui.server.cameraRename(self._lastCamName, new)
+        self._lastCamName = new2
+        if new != new2:
+            self.camOpts.setCurrentText(new2)
 
     @staticmethod
-    def _makeCBdependant(cb, cbparent):
+    def _makeCBdependant(cbparent, cb):
         '''
         disable/uncheck <cb> is <parentcb> is unchecked
         '''
@@ -761,64 +941,86 @@ if the device position differs for different currents in one measurement.''')
             if not checked:
                 cb.setChecked(False)
             cb.setEnabled(checked)
+
         cbparent.toggled.connect(lambda checked: fn(checked))
 
-    def _addIndented(self, widget, layout):
+    def _addIndented(self, layout, widget, nindent=1):
         ll = QtWidgets.QHBoxLayout()
-        ll.addSpacing(20)
+        ll.addSpacing(20 * nindent)
         ll.addWidget(widget)
         layout.addLayout(ll)
 
-    def config(self):
-        sf = self.cbSize.isChecked()
-        if sf:
-            s = self.sizeY.value(), self.sizeX.value()
-        else:
-            s = None
-        return {'calc_quality': self.cbQual.isChecked(),
-                'calc_uncertainty': self.cbUncert.isChecked(),
-                'post_processing': self.btnPP.isChecked(),
-                'performance': self.cbPerf.isChecked(),
-                'report_via_mail': self.cbMail.isChecked(),
-                'manual': self.cbManual.isChecked(),
-                'comments': self.manualEditor.toPlainText(),
-                'fixed_output_size': sf,
-                'output_image_size': s,
-                'module_is_deformed': self.cbDeformed.isChecked(),
-                'device_at_same_pos_for_diff_currents': self.cbPos.isChecked(),
-                'sub_px_alignment': self.cbPrecise.isChecked(),
-                'removeArtefacts': self.cbArtifacts.isChecked(),
-                'enhance_image': self.cbEnhance.isChecked(),
-                'variable_light_conditions': self.ckLight.isChecked()
-                }
+    def saveState(self):
+        return {'calibrate':{'update':self.cbCamUpdate.isChecked(),
+                             'variable_light_conditions': self.ckLight.isChecked(),
+                             'camname': self.camOpts.currentText()},
+                'correct':{'level':2 - self.corCam.currentIndex(),
+                           'calc_quality': self.cbQual.isChecked(),
+                           'calc_uncertainty': self.cbUncert.isChecked(),
+                           'fixed_output_size': self.cbSize.isChecked(),
+                           'output_image_size': (self.sizeY.value(), self.sizeX.value()),
+                           'module_is_deformed': self.cbDeformed.isChecked(),
+                           'device_at_same_pos_for_diff_currents': self.cbPos.isChecked(),
+#                            'sub_px_alignment': self.cbPrecise.isChecked(),
+                           'alignment_precission':self.comAlignment.currentText(),
+                           'removeArtefacts': self.cbArtifacts.isChecked(),
+                           'enhance_image': self.cbEnhance.isChecked()},
+                'post':{
+                        'features': self.cbFeatures.isChecked(),
+                        'statistics': self.cbStats.isChecked(),
+                        'timelapse':self.cbTimelapse.isChecked(),
+                        'ploss': self.cbPerf.isChecked(),
+                        'eloss': self.cbEnergyLoss.isChecked()},
+                'setup':{'correct':self.gCor.isChecked(),
+                         'post': self.cbPost.isChecked(),
+                         'manual_check': self.cbManual.isChecked(),
+                         'comments': self.manualEditor.toPlainText(),
+                         'report': self.cbReport.isChecked(),
+                         'report_via_mail': self.cbMail.isChecked()}}
 
-    def restore(self, c):
-        self.cbQual.setChecked(c['calc_quality'])
-        self.cbUncert.setChecked(c['calc_uncertainty'])
-        self.btnPP.setChecked(c['post_processing'])
-        self.cbPerf.setChecked(c['performance'])
-        self.cbMail.setChecked(c['report_via_mail'])
-        self.cbManual.setChecked(c['manual'])
-        self.manualEditor.setPlainText(c['comments'])
-        self.cbSize.setChecked(c['fixed_output_size'])
-        self.sizeX.setValue(c['output_image_size'][1])
-        self.sizeY.setValue(c['output_image_size'][0])
-        self.cbDeformed.setChecked(c['module_is_deformed'])
-        self.cbPos.setChecked(c['device_at_same_pos_for_diff_currents'])
-        self.cbPrecise.setChecked(c['sub_px_alignment'])
-        self.cbArtifacts.setChecked(c['removeArtefacts'])
-        self.cbEnhance.setChecked(c['enhance_image'])
-        self.ckLight.setChecked(c['variable_light_conditions'])
+    def restoreState(self, c):  
+        cc = c['correct']
+        self.cbQual.setChecked(cc['calc_quality'])
+        self.corCam.setCurrentIndex(2 - cc['level'])
+        self.cbUncert.setChecked(cc['calc_uncertainty'])
+        self.cbSize.setChecked(cc['fixed_output_size'])
+        self.sizeX.setValue(cc['output_image_size'][1])
+        self.sizeY.setValue(cc['output_image_size'][0])
+        self.cbDeformed.setChecked(cc['module_is_deformed'])
+        self.cbPos.setChecked(cc['device_at_same_pos_for_diff_currents'])
+        self.comAlignment.setCurrentText(cc['alignment_precission'])
+        self.cbArtifacts.setChecked(cc['removeArtefacts'])
+        self.cbEnhance.setChecked(cc['enhance_image'])
+        cc = c['post']        
+        self.cbStats.setChecked(cc['statistics'])
+        self.cbTimelapse.setChecked(cc['timelapse'])
+        self.cbFeatures.setChecked(cc['features'])
+        self.cbPerf.setChecked(cc['ploss'])
+        self.cbEnergyLoss.setChecked(cc['eloss'])
+        cc = c['setup'] 
+        self.gCor.setChecked(cc['correct'])
+        self.cbPost.setChecked(cc['post'])            
+        self.cbReport.setChecked(cc['report'])
+        self.cbMail.setChecked(cc['report_via_mail'])
+        self.cbManual.setChecked(cc['manual_check'])
+        self.manualEditor.setPlainText(cc['comments'])
+        cc = c['calibrate']  
+        self.cbCamUpdate.setChecked(cc['update'])
+        self.ckLight.setChecked(cc['variable_light_conditions'])
+        self.camOpts.setCurrentText(cc['camname'])
+
+#         cc0 = c['correct']
+#         PRO = True in c['post'].values() or \
+#               True in c['setup'].values() or \
+#               True in (cc0['enhance_image'], cc0['calc_uncertainty'], cc0['calc_quality'])
+#         self.gPP.setChecked(PRO)
 
 
 if __name__ == '__main__':
-    import sys
-    #######################
-    # temporary fix: app crack doesnt through exception
-    # https://stackoverflow.com/questions/38020020/pyqt5-app-exits-on-error-where-pyqt4-app-would-not
-    sys.excepthook = lambda t, v, b: sys.__excepthook__(t, v, b)
-    #######################
-    app = QtWidgets.QApplication([])
+    from client.Application import Application
+    
+    app = Application()
+
     w = TabConfig(None)
     w.resize(1100, 600)
 

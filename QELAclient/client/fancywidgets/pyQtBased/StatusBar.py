@@ -31,6 +31,10 @@ class StatusBar(QtWidgets.QStatusBar):
         return self._show(msg, time_ms)
 
     def _show(self, msg, time_ms):
+        try:
+            msg = msg.decode()
+        except AttributeError:
+            pass
         if msg != '\n':
             if '\n' in msg:
                 # show only last line:

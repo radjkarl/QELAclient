@@ -1,17 +1,16 @@
 import re
 from datetime import datetime
 
-
-def _numberAndName(row, index):
-    ind = 1
-    for ind, c in enumerate(index):
-        if not c.isdigit():
-            break
-    row[1] = index[ind:]  # measurement name
-    try:  # meas. number
-        row[0] = int(index[:ind])
-    except (ValueError, UnboundLocalError):
-        row[0] = 1
+# def _numberAndName(row, index):
+#     ind = 1
+#     for ind, c in enumerate(index):
+#         if not c.isdigit():
+#             break
+#     row[1] = index[ind:]  # measurement name
+#     try:  # meas. number
+#         row[0] = int(index[:ind])
+#     except (ValueError, UnboundLocalError):
+#         row[0] = 1
 
 
 def _current(row, basename):
@@ -22,24 +21,18 @@ def _current(row, basename):
                 break
         rr = basename[i:end].replace('-', '.')
 
-        row[3] = float(rr)
+        row[2] = float(rr)
     except Exception:
         # background?
-        row[3] = 0
+        row[2] = 0
 
 
 def _name(row, s):
-    row[2] = s
+    row[0] = s
 
 
-def _time(row, s):
-    row[5] = _float(s)
-
-
-CAT_FUNCTIONS = {"Meas. number and name [##Name]": _numberAndName,
-                 'Current [#A]': _current,
-                 'Module [Name]': _name,
-                 'Exposure time [#s]': _time}
+def _ID(row, s):
+    row[1] = s
 
 
 # format functions:
@@ -58,16 +51,27 @@ def _float(s):
     return float(_onlyDigits(s))
 
 
+def _time(row, s):
+    row[3] = _float(s)
+
+
 def _pass(s):
     return s
 
 
 def _date(style, s):
-    return datetime.strptime(s, style).strftime('%x %X')
+#     return datetime.strptime(s, style).strftime('%x %X')
+#     return datetime.strptime("2016/01/01 12:00:05", "%Y/%m/%d %H:%M:%S").isoformat()
+    return datetime.strptime(s, style).isoformat()
 
+
+CAT_FUNCTIONS = {'Measurement':_name,  # "Meas. number and name [##Name]": _numberAndName,
+                 'Current [#A]': _current,
+                 'Module ID': _ID,
+                 'Exposure time [#s]': _time}
 
 # format function TabUpload table columns
-_DD = {'n': _int,  # meas number
+_DD = {  # 'n': _int,  # meas number
        'N': _pass,  # meas name
        'i': _pass,  # ID
        'C': _float,  # current
@@ -77,14 +81,14 @@ _DD = {'n': _int,  # meas number
        'f': _float}  # fnumber
 
 # column index in TabUpload table:
-_RR = {'n': 0,  # meas number
-       'N': 1,  # meas name
-       'i': 2,  # ID
-       'C': 3,  # current
-       'D': 4,  # date
-       't': 5,  # exposure time
-       'I': 6,  # iso
-       'f': 7}
+_RR = {  # 'n': 0,  # meas number
+       'N': 0,  # meas name
+       'i': 1,  # ID
+       'C': 2,  # current
+       'D': 3,  # date
+       't': 4,  # exposure time
+       'I': 5,  # iso
+       'f': 6}
 
 
 def toRow(row, d):
@@ -92,11 +96,10 @@ def toRow(row, d):
         row[_RR[k]] = v
 
 
-def parsePath(path, style):
+def parsePath(path, style):  #    #n --> Measurement index 
     '''
     Extract values such as ISO, exposure time etc from directory of file name.
     Values to be extracted are indicated with a leading '%' followed be a value code:
-    #n --> Measurement index 
     #N --> Measurement name
     #i --> Module ID
     #C --> Current [A]
@@ -150,12 +153,16 @@ def parsePath(path, style):
 
 
 if __name__ == '__main__':
-    D = [(r'03rd Round',
-          '0#nrd #N',
-          {'n': 3, 'N': 'Round'}),
+    D = [
+        # PATH          STYLE        ANSWER
+        (r'03rd Round', '0#nrd #N', {'n': 3, 'N': 'Round'}),
+        # PATH
          (r'12__33_AA-2.3_XXX_2015-02-24T13:00:00.png',
+          # STYLE
           '#n__#t_AA-#f_XXX_#D{%Y-%m-%dT%H:%M:%S}.png',
-          {'n': 12, 't': 33.0, 'f': 2.3, 'D': '02/24/15 13:00:00'})]
+          # ANSWER
+          {'n': 12, 't': 33.0, 'f': 2.3, 'D': '2015-02-24T13:00:00'})
+         ]
 
     for path, style, answer in D:
-        assert parsePath(path, style) == answer
+        assert parsePath(path, style) == answer, '%s != %s' % (parsePath(path, style) , answer)

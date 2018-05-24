@@ -3,6 +3,7 @@ from client.items import FilenamesValidator
 
 
 class _LineEditCheck(QtWidgets.QLineEdit):
+
     def __init__(self):
         super().__init__()
         self.textChanged.connect(self._check)
@@ -17,6 +18,7 @@ class _LineEditCheck(QtWidgets.QLineEdit):
 
 
 class LineEditPhoneNumber(_LineEditCheck):
+
     def __init__(self):
         super().__init__()
         self.setPlaceholderText('+65 123456879')
@@ -29,6 +31,7 @@ class LineEditPhoneNumber(_LineEditCheck):
 
 
 class LineEditMail(_LineEditCheck):
+
     def __init__(self):
         super().__init__()
         self.setPlaceholderText('my@mail.sg')
@@ -41,6 +44,7 @@ class LineEditMail(_LineEditCheck):
 
 
 class LineEditPassword(_LineEditCheck):
+
     def __init__(self):
 
         super().__init__()
@@ -48,8 +52,8 @@ class LineEditPassword(_LineEditCheck):
             "Minimum length: 7, should contain at least 1 number and mixed upper/lowercase")
 
         self.setEchoMode(QtWidgets.QLineEdit.Password)
-        self.setInputMethodHints(QtCore.Qt.ImhHiddenText |
-                                 QtCore.Qt.ImhNoPredictiveText |
+        self.setInputMethodHints(QtCore.Qt.ImhHiddenText | 
+                                 QtCore.Qt.ImhNoPredictiveText | 
                                  QtCore.Qt.ImhNoAutoUppercase)
 
     def hasAcceptableInput(self):
@@ -60,6 +64,7 @@ class LineEditPassword(_LineEditCheck):
 
 
 class DialogNewUser(QtWidgets.QDialog):
+
     def __init__(self, name="", pwd="", mobile="", mail=""):
         super().__init__()
         self.setWindowTitle('Register new user')
@@ -129,6 +134,7 @@ class DialogNewUser(QtWidgets.QDialog):
 
 
 class FilenameInputDialog(QtWidgets.QDialog):
+
     def __init__(self, title, text):
         super().__init__()
         self.setWindowTitle(title)
@@ -157,6 +163,7 @@ class FilenameInputDialog(QtWidgets.QDialog):
 
 
 class DialogExistingUser(QtWidgets.QDialog):
+
     def __init__(self, user=None):
         super().__init__()
         self.setWindowTitle('Login existing user')
@@ -168,8 +175,8 @@ class DialogExistingUser(QtWidgets.QDialog):
 
         self.ePwd = e1 = QtWidgets.QLineEdit()
         e1.setEchoMode(QtWidgets.QLineEdit.Password)
-        e1.setInputMethodHints(QtCore.Qt.ImhHiddenText |
-                               QtCore.Qt.ImhNoPredictiveText |
+        e1.setInputMethodHints(QtCore.Qt.ImhHiddenText | 
+                               QtCore.Qt.ImhNoPredictiveText | 
                                QtCore.Qt.ImhNoAutoUppercase)
 
         self.btnLogin = b0 = QtWidgets.QPushButton("Login")
@@ -205,6 +212,51 @@ class DialogExistingUser(QtWidgets.QDialog):
 
     def cancel(self):
         self.result = None
+        self.close()
+
+
+class ForgotAccess(QtWidgets.QDialog):
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('Forgot access data')
+        self.email = None
+        lg = QtWidgets.QGridLayout()
+        self.setLayout(lg)
+        
+        txt = QtWidgets.QLabel("""No worries, we will send a mail to you 
+with username and password""")
+        
+        l0 = QtWidgets.QLabel('Your email address:')
+        
+        self.eMail = e0 = LineEditMail()
+        
+        self.btnConnect = b0 = QtWidgets.QPushButton("Send mail")
+        b1 = QtWidgets.QPushButton("Cancel")
+
+        lg.addWidget(txt, 0, 0, 1, 2)
+        
+        lg.addWidget(l0, 1, 0)
+        
+        lg.addWidget(e0, 1, 1)
+        
+        lg.addWidget(b0, 3, 0)
+        lg.addWidget(b1, 3, 1)
+
+        b0.clicked.connect(self.OK)
+        b1.clicked.connect(self.cancel)
+
+        e0.textChanged.connect(self.checkInput)
+
+    def checkInput(self):
+        self.btnConnect.setEnabled(self.eMail.hasAcceptableInput())
+
+    def OK(self):
+        self.email = self.eMail.text()
+        self.close()
+
+    def cancel(self):
+        self.setResult(0)
         self.close()
 
 

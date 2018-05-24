@@ -51,6 +51,9 @@ New run at %s
         self.stdout.close()
         self.logfile.close()
 
+    def flush(self):  # needed - .flush is called after exception
+        pass
+
 
 class MaxNLogger(Logger):
     '''
@@ -58,7 +61,7 @@ class MaxNLogger(Logger):
     once number of prints exceeds [maxN]
     '''
 
-    def __init__(self, stdout, path, mode='w', maxN=10000, ):
+    def __init__(self, stdout, path, mode='w', maxN=10000,):
         self._n = 0
         self._maxN = maxN
         self.path = path
@@ -75,7 +78,7 @@ class MaxNLogger(Logger):
         self._n += 1
         if self._n == self._maxN:
             self.logfile.close()
-            self.logfile = open(self.getPath(self.path), 'w')
+            self.logfile = open(self.getPath(), 'w')
         Logger.write(self, text)
 
 

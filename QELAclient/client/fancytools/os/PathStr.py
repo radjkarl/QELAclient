@@ -55,7 +55,14 @@ class PathStr(str):
         /myFile.xyz --> myFile.xyz
         /.myFile.xyz --> /.myFile
         '''
-        return '.'.join(self.split('.')[:-1])
+        try:
+            ind = self[::-1].index('.')
+            if self[-ind - 2] in ('\\', '//'):  # is hidden folder or files without ftype
+                return self
+            return self[:-ind - 1]
+        except IndexError:
+            return self
+#         return '.'.join(self.split('.')[:-1])
 
     def date(self):
         return os.stat(self).st_mtime
@@ -65,6 +72,7 @@ class PathStr(str):
         file/directory size in bytes
         '''
         if self.isdir():
+
             def folder_size(path):
                 total = 0
                 for entry in os.scandir(path):
@@ -73,6 +81,7 @@ class PathStr(str):
                     elif entry.is_dir():
                         total += folder_size(entry.path)
                 return total
+
             return folder_size(self)
         return os.stat(self).st_size
 
@@ -88,17 +97,17 @@ class PathStr(str):
                        '\r': r'\r',
                        '\t': r'\t',
                        '\v': r'\v',
-                       #'\x':r'\x',#cannot do \x - otherwise exception
+                       # '\x':r'\x',#cannot do \x - otherwise exception
                        '\'': r'\'',
                        '\"': r'\"',
-                       #'\0':r'\0', #doesnt work
+                       # '\0':r'\0', #doesnt work
                        '\1': r'\1',
                        '\2': r'\2',
                        '\3': r'\3',
                        '\4': r'\4',
                        '\5': r'\5',
                        '\6': r'\6',
-                       #'\7':r'\7',#same as \a is ASCI
+                       # '\7':r'\7',#same as \a is ASCI
                        }
 
         new_string = ''
@@ -136,6 +145,27 @@ class PathStr(str):
         """add a file/name to this PathStr instance"""
         return PathStr(os.path.join(self, *args))
 
+    def savejoin(self, *args):
+        '''
+        like .join() doe not allow parent/root folder selection 
+        e.g.
+        
+        >>> P = =  PathStr('C:\\Users\\me\\Documents')
+        >>> print(P.join('..', 'secret'))
+        C:\\Users\\me\\secret
+        
+        >>> print(P.savejoin('..', 'secret'))
+        C:\\Users\\me\\Documents\\secret
+        '''
+        args2 = []
+        for a in args:
+            if len(a):
+                if a[0] in ('\\', '/'):
+                    a = a[1:]
+                a = a.replace('..', '')
+                args2.append(a)
+        return self.join(*args2)
+
     def exists(self):
         """return whether PathStr instance exists as a file/folder"""
         return os.path.exists(self)
@@ -154,11 +184,13 @@ class PathStr(str):
     def basename(self):
         return PathStr(os.path.basename(self))
 
-    def move(self, dst):
+    def move(self, dst, forceoverride=False):
         """move this file/folder the [dst]"""
+        d = PathStr(dst).join(self.basename())
+        if forceoverride and d.exists():
+            d.remove()
         shutil.move(self, dst)
-        self = PathStr(dst).join(self.basename())
-        return self
+        return d
 
     def copy(self, dst):
         dst = PathStr(dst)
@@ -171,15 +203,6 @@ class PathStr(str):
         else:
             shutil.copy2(self, dst)
         return dst  # PathStr(dst)
-
-#     def mkdir(self, dname=None):
-#         if dname is None:
-#             n = self
-#         else:
-#             n = self.join(dname)
-#         if not n.exists():
-#             os.mkdir(n)
-#         return n
 
     def mkdir(self, *dname):
         if not self.exists():
@@ -194,7 +217,7 @@ class PathStr(str):
     def rename(self, new_file_name):
         newname = self.dirname().join(new_file_name)
         os.rename(self, newname)
-        self = PathStr(newname)
+        return newname
 
     def symlink(self, dst):
         '''
@@ -202,9 +225,15 @@ class PathStr(str):
         give user permission... 
         https://superuser.com/questions/104845/permission-to-make-symbolic-links-in-windows-7
         and update permissions:
-             gpupdate /force
+             cme.exe >>> gpupdate /force
         '''
-        os.symlink(self.abspath(), dst)
+        try:
+            os.symlink(self.abspath(), dst)
+        except OSError as e:
+            if str(e) == 'symbolic link privilege not held':
+                raise OSError('''PathStr.symlink failed. Looks like you are lacking privilege to create symlinks. 
+                Please check: https://stackoverflow.com/questions/6260149/os-symlink-support-in-windows?answertab=votes#tab-top''')
+            raise
 
     def remove(self, name=None):
         f = self
@@ -230,11 +259,35 @@ class PathStr(str):
             s = self
         return PathStr(s + '.' + ftype)
 
+    def extend(self, add):
+        '''
+        add <s> for path name:
+            path = a/b/c.py  
+            s='_1'
+            -> a/b/c_1.py
+        '''
+        ss = self.split('.')
+        s0 = '.'.join(ss[:-1])
+        s1 = ss[-1]
+        return '%s%s.%s' % (s0, add, s1) 
+
     def isfile(self):
         return os.path.isfile(self)
 
     def isdir(self):
         return os.path.isdir(self)
+
+    def isFileLike(self):
+        '''
+        whether path would be a file (independent wether it exist or not
+             True : .../jhg.hg  [file]
+             False /jgu/jg      [dir]
+             False  /jhg/.hg    [hidden] 
+        '''
+        return '.' in self.basename()[1:]
+
+    def isHidden(self):
+        return self.basename()[0] == '.'
 
     def listdir(self):
         if os.path.isdir(self):
@@ -265,6 +318,7 @@ class PathStr(str):
     def count(self, nested=True):
         '''count number of files'''
         if self.isdir():
+
             def _count(path):
                 total = 0
                 for entry in os.scandir(path):
@@ -273,6 +327,7 @@ class PathStr(str):
                     elif entry.is_dir() and nested:
                         total += _count(entry.path)
                 return total
+
             return _count(self)
         return 1  # os.stat(self).st_size
 
@@ -291,6 +346,7 @@ class PathStr(str):
                     if not includeroot:
                         ff = PathStr(ff[len(self) + 1:])
                     yield ff
+
         yield from _fn(0, self)
 
     def folders(self):
@@ -336,5 +392,9 @@ class PathStr(str):
 
 
 if __name__ == "__main__":
+    p = PathStr(r'C:\Users\karl\Documents\Work\Programming\git\daServer\data\users\karl2\calibration')
+    print(p.join(r'\test'))
+
+    jhh
     import doctest
     doctest.testmod()

@@ -5,10 +5,12 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph_karl as pg
 from pyqtgraph_karl.imageview.ImageView import ImageView
 
-from imgProcessor.imgIO import imread
+# from imgProcessor.imgIO import imread
 
-from dataArtist.items.PerspectiveGridROI import PerspectiveGridROI as PGROI
-
+from dataArtist.items.PerspectiveGridROIbase import PerspectiveGridROI as PGROI
+# LOCAL
+from client.imread import imread
+from imgProcessor.transformations import toGray
 
 pg.setConfigOption('foreground', 'k')
 pg.setConfigOption('background', 'w')
@@ -16,6 +18,7 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 
 
 class PerspectiveGridROI(PGROI):
+
     def __init__(self, pen={'color': 'g', 'width': 3}, **kwargs):
         PGROI.__init__(self, pen=pen, **kwargs)
         h = self.handles[0]['item']
@@ -26,6 +29,7 @@ class PerspectiveGridROI(PGROI):
 
 
 class ImageView2(ImageView):
+
     def __init__(self):
 
         ImageView.__init__(self, view=pg.PlotItem())
@@ -77,7 +81,7 @@ class GridEditor(QtWidgets.QWidget):
         self.edBBY.setValue(nsublines[1])
         self.edBBY.valueChanged.connect(self._changedBusbars)
 
-        self.btnBLcorner = QtWidgets.QPushButton('Top-Left corner')
+        self.btnBLcorner = QtWidgets.QPushButton('Rotate 90DEG')
         self.btnBLcorner.setIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_BrowserReload))
         self.btnBLcorner.clicked.connect(self._changedBLcorner)
@@ -95,7 +99,7 @@ class GridEditor(QtWidgets.QWidget):
 
         w = self.imageview
         self.grid = PerspectiveGridROI(
-            nCells=ncells, nSublines=nsublines[::-1])
+            nCells=ncells, nSublines=nsublines)
         self.grid.sigRegionChangeFinished.connect(self._changedVertices)
         w.view.vb.addItem(self.grid)
 
@@ -108,13 +112,13 @@ class GridEditor(QtWidgets.QWidget):
     def _changedGrid(self):
         x, y = self.edX.value(), self.edY.value()
         self.grid.setNCells((x, y))
-        self.gridChanged.emit('grid', [x, y])
+        self.gridChanged.emit('grid', [y, x])
 
     def _changedBusbars(self):
         x, y = (self.edBBX.value(),
                 self.edBBY.value())
         self.grid.setNSublines((x, y))
-        self.gridChanged.emit('nsublines', [x, y])
+        self.gridChanged.emit('nsublines', [y, x])
 
     def _changedBLcorner(self):
         vertices = self.grid.vertices()
@@ -126,6 +130,7 @@ class GridEditor(QtWidgets.QWidget):
 
 
 class GridEditorDialog(QtWidgets.QDialog):
+
     def __init__(self, imagepath, *args, **kwargs):
         super().__init__()
         self.setWindowTitle('Set grid manual')
@@ -134,7 +139,7 @@ class GridEditorDialog(QtWidgets.QDialog):
 
         self.editor = GridEditor(*args, **kwargs)
         # set image
-        img = imread(imagepath, 'gray')
+        img = toGray(imread(imagepath))  # , 'gray')
         self.editor.imageview.setImage(img)
 
         if 'vertices' not in kwargs:
@@ -163,12 +168,21 @@ class GridEditorDialog(QtWidgets.QDialog):
 
 
 class CompareGridEditor(GridEditor):
+
     def __init__(self):
         super().__init__()
         self.imageview.view.setTitle('Camera corrected')
         self.imageview2 = ImageView2()
         self.imageview2.view.setTitle('Perspective corrected')
         self.layout().addWidget(self.imageview2, 1, 1)
+
+    def readImg1(self, path):
+        img = imread(path)
+        self.imageview.setImage(img, autoRange=False)
+
+    def readImg2(self, path):
+        img = imread(path)
+        self.imageview2.setImage(img, autoRange=False)
 
 
 if __name__ == '__main__':
@@ -180,10 +194,10 @@ if __name__ == '__main__':
     sys.excepthook = lambda t, v, b: sys.__excepthook__(t, v, b)
     #######################
     app = QtWidgets.QApplication([])
-    w = GridEditor(vertices=[[0,   0],
+    w = GridEditor(vertices=[[0, 0],
                              [0, 10],
                              [10, 10],
-                             [10,  0]])
+                             [10, 0]])
 
     w.gridChanged.connect(print)
     w.verticesChanged.connect(print)

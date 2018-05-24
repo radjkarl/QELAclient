@@ -16,4 +16,4 @@ MEDIA_PATH = PathStr(__file__).dirname().join(
     'media')  # TODO: works in FROZEN?
 
 ICON = MEDIA_PATH.join('logo.svg')
-PATH = PathStr.home().mkdir(".dataArtistUploader")
+PATH = PathStr.home().mkdir(".%s" % name)
